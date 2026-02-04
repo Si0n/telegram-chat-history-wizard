@@ -12,6 +12,12 @@ from ingestion.parser import TelegramExportParser, find_exports
 
 logger = logging.getLogger(__name__)
 
+# Allowed chat IDs (supergroup + old basic group before migration)
+ALLOWED_CHAT_IDS = {
+    1101664871,  # Current supergroup
+    232481601,   # Old basic group (pre-migration, 2019 messages)
+}
+
 
 class Indexer:
     """Index Telegram exports into searchable database."""
@@ -43,11 +49,10 @@ class Indexer:
         metadata = parser.get_metadata()
         logger.info(f"Indexing export: {metadata.chat_name} (ID: {metadata.chat_id})")
 
-        # Validate chat_id if we have existing exports
-        expected_chat_id = self.db.get_expected_chat_id()
-        if expected_chat_id and metadata.chat_id != expected_chat_id:
+        # Validate chat_id against allowed list
+        if metadata.chat_id not in ALLOWED_CHAT_IDS:
             raise ValueError(
-                f"Chat ID mismatch! Expected {expected_chat_id}, got {metadata.chat_id}"
+                f"Unknown chat ID {metadata.chat_id}. Allowed: {ALLOWED_CHAT_IDS}"
             )
 
         # Create export record

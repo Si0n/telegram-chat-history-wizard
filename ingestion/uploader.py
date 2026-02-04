@@ -12,6 +12,12 @@ from dataclasses import dataclass
 import config
 from db import Database
 
+# Allowed chat IDs (supergroup + old basic group before migration)
+ALLOWED_CHAT_IDS = {
+    1101664871,  # Current supergroup
+    232481601,   # Old basic group (pre-migration, 2019 messages)
+}
+
 
 @dataclass
 class ValidationResult:
@@ -87,12 +93,11 @@ class ExportUploader:
                         error="No chat ID found in export"
                     )
 
-                # Check if chat_id matches existing exports
-                expected_chat_id = self.db.get_expected_chat_id()
-                if expected_chat_id and chat_id != expected_chat_id:
+                # Check if chat_id is in allowed list
+                if chat_id not in ALLOWED_CHAT_IDS:
                     return ValidationResult(
                         valid=False,
-                        error=f"Wrong chat! Expected chat_id: {expected_chat_id}, got: {chat_id}"
+                        error=f"Unknown chat ID {chat_id}. Allowed: {ALLOWED_CHAT_IDS}"
                     )
 
                 return ValidationResult(
