@@ -47,43 +47,34 @@ python main.py index
 python main.py bot
 ```
 
-## Commands
+## Usage
 
-### Search Commands
+### Ask Questions
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/search <query>` | Semantic search | `/search криптовалюти інвестиції` |
-| `/quote <user> <topic>` | Find user's messages on topic | `/quote Женек біткоін` |
-| `/flip <user> <topic>` | Check if user changed position | `/flip Женек крипта` |
-| `/context <id>` | Show context around message | `/context 12345` |
-| `/stats` | Database statistics | `/stats` |
-
-### Alias Commands
-
-| Command | Description | Example |
-|---------|-------------|---------|
-| `/aliases` | List all nicknames | `/aliases` |
-| `/alias <user> <nick>` | Add nickname | `/alias Женек буш` |
-| `/alias_remove <nick>` | Remove nickname | `/alias_remove буш` |
-| `/seed_aliases` | Load predefined nicknames | `/seed_aliases` |
-
-### AI Questions
-
-Tag the bot with a question using nicknames:
+Tag the bot with any question:
 
 ```
-@xxx чи гусь казав що CCC погана людина?
+@bot_name чи гусь казав що порошенко поганий?
+@bot_name що думав буш про крипту до 2022?
+@bot_name коли серж міняв думку про біткоін?
 ```
 
-The bot will:
-1. Understand "гусь" refers to a specific user
-2. Search chat history for relevant messages
-3. Return formatted quotes with dates
+The bot:
+- Understands nicknames (гусь, буш, серж)
+- Supports date filters (до 2022, після 2023)
+- Provides AI-synthesized answers with quotes
 
-**Follow-up**: Reply to bot's response to refine your search:
-- "покажи ще" - show more results
-- "а що він казав про біткоін?" - search for another topic
+**Follow-up**: Reply to bot's response to refine your search.
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `/stats` | Database statistics |
+| `/aliases` | List nicknames |
+| `/alias <user> <nick>` | Add nickname |
+| `/seed_aliases` | Load predefined nicknames |
+| `/context <id>` | Show message context |
 
 ## CLI Commands
 

@@ -618,12 +618,9 @@ def setup_handlers(app: Application, db: Database, vector_store: VectorStore):
         answer_synthesizer=answer_synthesizer
     )
 
-    # Command handlers
+    # Command handlers (minimal - AI handles most queries via @mention)
     app.add_handler(CommandHandler("start", handlers.start))
     app.add_handler(CommandHandler("help", handlers.help_command))
-    app.add_handler(CommandHandler("search", handlers.search))
-    app.add_handler(CommandHandler("quote", handlers.quote))
-    app.add_handler(CommandHandler("flip", handlers.flip))
     app.add_handler(CommandHandler("context", handlers.context_command))
     app.add_handler(CommandHandler("stats", handlers.stats))
     app.add_handler(CommandHandler("upload", handlers.upload))
