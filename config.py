@@ -26,7 +26,7 @@ SQLITE_DB_PATH = Path(os.getenv("SQLITE_DB_PATH", DATA_DIR / "metadata.db"))
 CHROMA_DB_PATH = Path(os.getenv("CHROMA_DB_PATH", DATA_DIR / "chroma"))
 
 # Processing
-EMBEDDING_BATCH_SIZE = 100  # Messages per batch for embedding
+EMBEDDING_BATCH_SIZE = 30  # Messages per batch for embedding (low for memory)
 MAX_MESSAGE_LENGTH = 8000   # Truncate very long messages
 
 # Search

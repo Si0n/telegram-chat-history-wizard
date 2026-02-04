@@ -27,53 +27,80 @@ def migrate():
     cursor.execute("PRAGMA table_info(messages)")
     columns = {row[1] for row in cursor.fetchall()}
 
-    if "chat_id" in columns:
-        print("chat_id column already exists. No migration needed.")
-        conn.close()
-        return
+    if "chat_id" not in columns:
+        print("Adding chat_id column to messages table...")
+        cursor.execute("ALTER TABLE messages ADD COLUMN chat_id BIGINT")
 
-    print("Adding chat_id column to messages table...")
+        # Get chat_id from related export for existing messages
+        print("Populating chat_id from exports...")
+        cursor.execute("""
+            UPDATE messages
+            SET chat_id = (
+                SELECT exports.chat_id
+                FROM exports
+                WHERE exports.id = messages.export_id
+            )
+        """)
 
-    # Add chat_id column
-    cursor.execute("ALTER TABLE messages ADD COLUMN chat_id BIGINT")
+        # Set default for any remaining nulls
+        cursor.execute("UPDATE messages SET chat_id = 1101664871 WHERE chat_id IS NULL")
+        conn.commit()
 
-    # Get chat_id from related export for existing messages
-    print("Populating chat_id from exports...")
+    # Check for existing unique constraint on message_id alone
+    cursor.execute("PRAGMA index_list(messages)")
+    indexes = cursor.fetchall()
+    print(f"Current indexes: {indexes}")
+
+    # SQLite can't drop constraints easily, so we recreate the table
+    print("\nRecreating messages table without old unique constraint...")
+
+    # Create new table with correct schema
     cursor.execute("""
-        UPDATE messages
-        SET chat_id = (
-            SELECT exports.chat_id
-            FROM exports
-            WHERE exports.id = messages.export_id
+        CREATE TABLE IF NOT EXISTS messages_new (
+            id INTEGER PRIMARY KEY,
+            message_id BIGINT NOT NULL,
+            chat_id BIGINT NOT NULL,
+            export_id INTEGER NOT NULL REFERENCES exports(id),
+            user_id BIGINT,
+            username VARCHAR(255),
+            first_name VARCHAR(255),
+            last_name VARCHAR(255),
+            text TEXT,
+            timestamp DATETIME NOT NULL,
+            timestamp_unix BIGINT,
+            reply_to_message_id BIGINT,
+            vector_id VARCHAR(255),
+            is_embedded BOOLEAN DEFAULT 0,
+            UNIQUE(message_id, chat_id)
         )
     """)
 
-    # Set default for any remaining nulls (shouldn't happen)
-    cursor.execute("UPDATE messages SET chat_id = 1101664871 WHERE chat_id IS NULL")
+    # Copy data
+    print("Copying data to new table...")
+    cursor.execute("""
+        INSERT OR IGNORE INTO messages_new
+        SELECT id, message_id, chat_id, export_id, user_id, username,
+               first_name, last_name, text, timestamp, timestamp_unix,
+               reply_to_message_id, vector_id, is_embedded
+        FROM messages
+    """)
 
-    # Drop old unique constraint and create new one
-    # SQLite doesn't support dropping constraints, so we need to recreate the table
-    # For now, just add an index
-    print("Creating index on chat_id...")
-    try:
-        cursor.execute("CREATE INDEX idx_messages_chat_id ON messages(chat_id)")
-    except sqlite3.OperationalError:
-        print("Index already exists")
+    # Drop old table and rename
+    print("Replacing old table...")
+    cursor.execute("DROP TABLE messages")
+    cursor.execute("ALTER TABLE messages_new RENAME TO messages")
 
-    # Create composite unique index (instead of constraint)
-    print("Creating composite unique index...")
-    try:
-        cursor.execute("CREATE UNIQUE INDEX uq_message_chat ON messages(message_id, chat_id)")
-    except sqlite3.OperationalError as e:
-        if "already exists" in str(e):
-            print("Unique index already exists")
-        else:
-            print(f"Note: {e}")
-            print("This is OK if you're reindexing from scratch")
+    # Recreate indexes
+    print("Creating indexes...")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_reply_to ON messages(reply_to_message_id)")
 
     conn.commit()
     conn.close()
-    print("Migration complete!")
+    print("\nMigration complete!")
 
 
 if __name__ == "__main__":

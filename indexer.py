@@ -1,6 +1,7 @@
 """
 Index chat exports into the database and vector store.
 """
+import gc
 import logging
 from pathlib import Path
 from typing import Optional
@@ -183,6 +184,10 @@ class Indexer:
                 progress_callback(stats)
 
             logger.info(f"Embedded {stats['total_embedded']} messages so far...")
+
+            # Clean up memory
+            del texts, embeddings, metadatas, db_ids, messages
+            gc.collect()
 
         logger.info(f"Embedding complete: {stats}")
         return stats

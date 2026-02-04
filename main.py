@@ -153,7 +153,9 @@ def print_help():
     """Print usage help."""
     print(__doc__)
     print("Commands:")
-    print("  index    - Index all exports in chat_exports/")
+    print("  index    - Index all exports + create embeddings")
+    print("  import   - Import exports only (no embeddings)")
+    print("  embed    - Create embeddings for imported messages")
     print("  bot      - Run the Telegram bot")
     print("  stats    - Show database statistics")
     print("  reindex  - Force full reindex (clears existing data)")
@@ -166,6 +168,38 @@ def print_help():
     print("  5. Run 'python main.py bot'")
 
 
+def run_import_only():
+    """Import messages without creating embeddings."""
+    print("=" * 50)
+    print("Importing Chat Exports (no embeddings)")
+    print("=" * 50)
+
+    indexer = Indexer()
+    stats = indexer.index_all_exports()
+
+    print(f"\nExports processed: {stats.get('exports_processed', 0)}")
+    print(f"New messages: {stats.get('total_new_messages', 0)}")
+    print(f"Duplicates skipped: {stats.get('total_duplicates', 0)}")
+    print("\nRun 'python main.py embed' to create embeddings.")
+
+
+def run_embed_only():
+    """Create embeddings for messages that don't have them."""
+    print("=" * 50)
+    print("Creating Embeddings")
+    print("=" * 50)
+
+    indexer = Indexer()
+
+    def progress(stats):
+        print(f"  ... {stats.get('total_embedded', 0)} messages embedded")
+
+    stats = indexer.create_embeddings(progress_callback=progress)
+
+    print(f"\nTotal embedded: {stats.get('total_embedded', 0)}")
+    print(f"Batches processed: {stats.get('batches_processed', 0)}")
+
+
 def main():
     if len(sys.argv) < 2:
         print_help()
@@ -175,6 +209,10 @@ def main():
 
     if command == "index":
         run_index()
+    elif command == "import":
+        run_import_only()
+    elif command == "embed":
+        run_embed_only()
     elif command == "bot":
         run_bot()
     elif command == "stats":
