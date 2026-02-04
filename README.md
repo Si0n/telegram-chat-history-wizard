@@ -73,7 +73,7 @@ python main.py bot
 Tag the bot with a question using nicknames:
 
 ```
-@dobby_the_free_trader_bot чи гусь казав що порошенко погана людина?
+@dobby_the_free_trader_bot чи гусь казав що CCC погана людина?
 ```
 
 The bot will:
