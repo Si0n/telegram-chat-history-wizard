@@ -19,6 +19,7 @@ from search import VectorStore, FlipDetector, EmbeddingService
 from search.embeddings import ChatService
 from search.question_parser import QuestionParser
 from search.answer_synthesizer import AnswerSynthesizer
+from search.search_agent import SearchAgent
 from ingestion import ExportUploader
 from .formatters import MessageFormatter
 from .conversation_context import ConversationContext
@@ -46,6 +47,7 @@ class BotHandlers:
         self.uploader = uploader
         self.question_parser = question_parser
         self.answer_synthesizer = answer_synthesizer
+        self.search_agent = SearchAgent(vector_store)
         self.formatter = MessageFormatter()
         self.conversation_context = ConversationContext()
         # Cache for search queries by message_id (for context highlighting)
@@ -266,37 +268,44 @@ class BotHandlers:
 
             logger.info(f"Parsed question: {parsed}")
 
-            # Search based on parsed query (get more results for AI analysis)
+            # Multi-step search with automatic query reformulation
             if parsed.mentioned_users:
-                # Search for specific users
+                # Search for specific users with agent
                 all_results = []
                 for user_id, username in parsed.mentioned_users:
-                    results = self.vector_store.search_by_user(
-                        query=parsed.search_query,
-                        user_identifier=str(user_id),
-                        n_results=config.MAX_SEARCH_LIMIT,
+                    results, session = await self.search_agent.search(
+                        question=parsed.original_question,
+                        initial_query=parsed.search_query,
+                        user_id=user_id,
                         date_from=parsed.date_from,
-                        date_to=parsed.date_to
+                        date_to=parsed.date_to,
+                        min_relevant=3,
+                        max_iterations=3
                     )
                     all_results.extend(results)
+                    logger.info(f"Search for user {username}: {len(results)} results after {session.iterations} iterations")
             else:
-                # General search
-                all_results = self.vector_store.search(
-                    query=parsed.search_query,
-                    n_results=config.MAX_SEARCH_LIMIT,
+                # General search with agent
+                all_results, session = await self.search_agent.search(
+                    question=parsed.original_question,
+                    initial_query=parsed.search_query,
                     date_from=parsed.date_from,
-                    date_to=parsed.date_to
+                    date_to=parsed.date_to,
+                    min_relevant=3,
+                    max_iterations=3
                 )
+                logger.info(f"Search: {len(all_results)} results after {session.iterations} iterations, queries: {session.queries_tried}")
 
             # Apply sorting if requested
             if parsed.sort_order != "relevance":
                 all_results = self._sort_results(all_results, parsed.sort_order)
 
-            # Synthesize answer using AI
+            # Synthesize answer (skip additional filtering since agent already filtered)
             synthesized = await self.answer_synthesizer.synthesize_async(
                 question=parsed.original_question,
                 results=all_results,
-                mentioned_users=parsed.mentioned_users
+                mentioned_users=parsed.mentioned_users,
+                filter_relevance=False  # Already filtered by agent
             )
 
             # Format and send response
