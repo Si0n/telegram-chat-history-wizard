@@ -61,6 +61,68 @@ class EmbeddingService:
         embeddings = sorted(response.data, key=lambda x: x.index)
         return [e.embedding for e in embeddings]
 
+    async def embed_parallel_batches(
+        self,
+        all_texts: list[str],
+        batch_size: int = 250,
+        max_workers: int = 3
+    ) -> list[list[float]]:
+        """
+        Process texts in parallel batches for maximum throughput.
+
+        Args:
+            all_texts: All texts to embed
+            batch_size: Size of each batch (OpenAI limit is ~2048 per request)
+            max_workers: Number of concurrent API requests
+
+        Returns:
+            All embeddings in order
+        """
+        if not all_texts:
+            return []
+
+        # Split into batches
+        batches = []
+        for i in range(0, len(all_texts), batch_size):
+            batches.append(all_texts[i:i + batch_size])
+
+        # Process batches with semaphore to limit concurrency
+        semaphore = asyncio.Semaphore(max_workers)
+
+        async def process_batch(batch_idx: int, batch: list[str]):
+            async with semaphore:
+                embeddings = await self.embed_batch_async(batch)
+                return batch_idx, embeddings
+
+        # Run all batches concurrently (limited by semaphore)
+        tasks = [process_batch(i, batch) for i, batch in enumerate(batches)]
+        results = await asyncio.gather(*tasks)
+
+        # Sort by batch index and flatten
+        results.sort(key=lambda x: x[0])
+        all_embeddings = []
+        for _, embeddings in results:
+            all_embeddings.extend(embeddings)
+
+        return all_embeddings
+
+    def embed_parallel(
+        self,
+        texts: list[str],
+        batch_size: int = None,
+        max_workers: int = None
+    ) -> list[list[float]]:
+        """
+        Sync wrapper for parallel batch embedding.
+        Optimized for large-scale embedding jobs.
+        """
+        batch_size = batch_size or getattr(config, 'EMBEDDING_BATCH_SIZE', 250)
+        max_workers = max_workers or getattr(config, 'EMBEDDING_WORKERS', 3)
+
+        return asyncio.run(
+            self.embed_parallel_batches(texts, batch_size, max_workers)
+        )
+
 
 class ChatService:
     """OpenAI chat completion for analysis."""

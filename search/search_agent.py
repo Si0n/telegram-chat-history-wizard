@@ -71,6 +71,52 @@ def _cache_relevance(message_id: int, query: str, score: int):
     _relevance_cache[message_id][query_hash] = score
 
 
+HYDE_PROMPT = """You are simulating chat messages that would answer a question about chat history.
+
+Question: {question}
+
+Generate 2-3 SHORT example chat messages (in Ukrainian/Russian) that would directly answer or discuss this question.
+These should sound like real casual chat messages, not formal text.
+
+IMPORTANT - Use common slang and real names together:
+- "зе/зеля" = Зеленський
+- "порох/петя" = Порошенко
+- "пуйло/путлер" = Путін
+- "біток/btc" = біткоін
+- "крипта" = криптовалюта
+
+Examples of good output:
+Question: "чи гусь казав що біткоін скам?"
+Output: "біткоін це повний скам, не вкладайте гроші"
+"я вже давно кажу що крипта - це піраміда"
+"btc може впасти до нуля"
+
+Question: "що думали про зе?"
+Output: "Зеленський робить все правильно"
+"зєля знову щось обіцяє"
+"клоун з 95 кварталу"
+
+Now generate messages for the question above. Output ONLY the messages, one per line:"""
+
+
+RERANK_PROMPT = """You are ranking search results by relevance to a question.
+
+Question: {question}
+
+Search Results:
+{results}
+
+Rank these results from MOST to LEAST relevant. Consider:
+1. Does it directly answer the question?
+2. Is it from the right person (if specified)?
+3. Is the topic/context correct?
+
+Respond with JSON array of result numbers in order of relevance (most relevant first):
+Example: [3, 1, 5, 2, 4]
+
+Your ranking:"""
+
+
 REFORMULATE_PROMPT = """You are helping improve a search query that didn't find good results.
 
 Original question: {question}
@@ -103,11 +149,97 @@ Respond with JSON array of scores: [score1, score2, ...]"""
 
 
 class SearchAgent:
-    """Multi-step search agent with query reformulation."""
+    """Multi-step search agent with query reformulation, HyDE, and reranking."""
 
     def __init__(self, vector_store: VectorStore):
         self.vector_store = vector_store
         self.chat_service = ChatService()
+
+    async def generate_hyde_documents(self, question: str) -> list[str]:
+        """
+        Generate Hypothetical Document Embeddings (HyDE).
+        Creates synthetic chat messages that would answer the question.
+        """
+        prompt = HYDE_PROMPT.format(question=question)
+
+        try:
+            response = await self.chat_service.complete_async(
+                prompt=prompt,
+                system="Generate realistic chat messages in Ukrainian or Russian. Be concise.",
+                max_tokens=200
+            )
+
+            # Split into individual messages
+            lines = [line.strip().strip('"\'') for line in response.strip().split('\n')]
+            hyde_docs = [line for line in lines if line and len(line) > 10]
+
+            logger.info(f"Generated {len(hyde_docs)} HyDE documents for: {question[:50]}...")
+            return hyde_docs[:3]  # Max 3
+
+        except Exception as e:
+            logger.warning(f"HyDE generation failed: {e}")
+            return []
+
+    async def rerank_results(
+        self,
+        question: str,
+        results: list[SearchResult],
+        top_k: int = 10
+    ) -> list[SearchResult]:
+        """
+        Rerank results using LLM for better relevance ordering.
+        """
+        if not results or len(results) <= 1:
+            return results
+
+        # Take top candidates for reranking (limit API cost)
+        candidates = results[:min(15, len(results))]
+
+        # Format results for reranking
+        results_text = []
+        for i, r in enumerate(candidates, 1):
+            username = r.metadata.get("display_name", "Unknown")
+            date = r.metadata.get("formatted_date", "")
+            text = r.text[:200] if r.text else ""
+            results_text.append(f"[{i}] {username} ({date}): \"{text}\"")
+
+        prompt = RERANK_PROMPT.format(
+            question=question,
+            results="\n".join(results_text)
+        )
+
+        try:
+            response = await self.chat_service.complete_async(
+                prompt=prompt,
+                system="You are a search result ranker. Respond only with JSON array of numbers.",
+                max_tokens=100
+            )
+
+            # Parse ranking
+            json_match = re.search(r'\[[\d,\s]+\]', response)
+            if json_match:
+                ranking = json.loads(json_match.group())
+
+                # Reorder results based on ranking
+                reranked = []
+                seen = set()
+                for idx in ranking:
+                    if 1 <= idx <= len(candidates) and idx not in seen:
+                        reranked.append(candidates[idx - 1])
+                        seen.add(idx)
+
+                # Add any remaining that weren't in ranking
+                for i, r in enumerate(candidates, 1):
+                    if i not in seen:
+                        reranked.append(r)
+
+                logger.info(f"Reranked {len(candidates)} results, new order: {ranking[:5]}...")
+                return reranked[:top_k]
+
+        except Exception as e:
+            logger.warning(f"Reranking failed: {e}")
+
+        return results[:top_k]
 
     async def search(
         self,
@@ -118,10 +250,23 @@ class SearchAgent:
         date_to: str = None,
         min_relevant: int = 3,
         min_relevance_score: int = 5,
-        max_iterations: int = 3
+        max_iterations: int = 3,
+        use_hyde: bool = True,
+        use_reranking: bool = True
     ) -> tuple[list[dict], SearchSession]:
         """
-        Multi-step search with automatic query reformulation.
+        Multi-step search with automatic query reformulation, HyDE, and reranking.
+
+        Args:
+            question: Original user question
+            initial_query: Parsed search query
+            user_id: Filter by user
+            date_from/date_to: Date filters
+            min_relevant: Minimum relevant results needed
+            min_relevance_score: Minimum score to consider relevant (0-10)
+            max_iterations: Max reformulation attempts
+            use_hyde: Use Hypothetical Document Embeddings
+            use_reranking: Use LLM reranking for final results
 
         Returns:
             (relevant_results, session) - results and search session for debugging
@@ -131,6 +276,16 @@ class SearchAgent:
             max_iterations=max_iterations
         )
 
+        # === HyDE: Generate hypothetical documents ===
+        hyde_queries = []
+        if use_hyde:
+            hyde_docs = await self.generate_hyde_documents(question)
+            if hyde_docs:
+                hyde_queries = hyde_docs
+                logger.info(f"Using {len(hyde_queries)} HyDE queries in addition to original")
+
+        # Combine initial query with HyDE docs for search
+        all_queries = [initial_query] + hyde_queries
         current_query = initial_query
 
         while session.iterations < max_iterations:
@@ -139,14 +294,28 @@ class SearchAgent:
 
             logger.info(f"Search iteration {session.iterations}: '{current_query}'")
 
-            # Search
-            raw_results = self.vector_store.search(
-                query=current_query,
-                n_results=20,  # Get more candidates
-                user_id=user_id,
-                date_from=date_from,
-                date_to=date_to
-            )
+            # On first iteration, also search with HyDE queries
+            queries_to_search = [current_query]
+            if session.iterations == 1 and hyde_queries:
+                queries_to_search.extend(hyde_queries)
+                logger.info(f"Searching with {len(queries_to_search)} queries (1 original + {len(hyde_queries)} HyDE)")
+
+            # Search with all queries and merge results
+            raw_results = []
+            seen_ids = set()
+            for query in queries_to_search:
+                results = self.vector_store.search(
+                    query=query,
+                    n_results=15,  # Get candidates per query
+                    user_id=user_id,
+                    date_from=date_from,
+                    date_to=date_to
+                )
+                for r in results:
+                    vec_id = r.get("vector_id", "")
+                    if vec_id not in seen_ids:
+                        seen_ids.add(vec_id)
+                        raw_results.append(r)
 
             if not raw_results:
                 logger.info("No results found, trying to reformulate...")
@@ -222,6 +391,15 @@ class SearchAgent:
             key=lambda x: (x.relevance_score or 0, x.similarity),
             reverse=True
         )
+
+        # === Reranking: Use LLM to reorder top results ===
+        if use_reranking and len(session.relevant_results) > 3:
+            logger.info(f"Reranking {len(session.relevant_results)} results...")
+            session.relevant_results = await self.rerank_results(
+                question=question,
+                results=session.relevant_results,
+                top_k=min(15, len(session.relevant_results))
+            )
 
         # Convert back to dict format for compatibility
         results = []

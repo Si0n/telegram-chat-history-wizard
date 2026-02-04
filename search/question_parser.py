@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from search.embeddings import ChatService
+from search.entity_aliases import expand_query_with_aliases, get_canonical, ENTITY_ALIASES
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,16 @@ RULES:
 3. Include words that would ACTUALLY APPEAR in relevant messages
 4. Think about HOW people discuss this topic in casual chat
 5. Use 8-15 words to create a rich semantic field
+6. EXPAND SLANG/NICKNAMES to their full forms (see below)
+
+COMMON SLANG AND NICKNAMES - always include canonical form:
+- "зе", "зеля", "зелупа" → include "Зеленський"
+- "порох", "петя", "рошен" → include "Порошенко"
+- "пуйло", "хуйло", "бункерний" → include "Путін"
+- "біток", "btc" → include "біткоін bitcoin криптовалюта"
+- "крипта" → include "криптовалюта bitcoin"
+- "рашка", "мордор" → include "росія"
+- "орки", "кацапи" → include "росіяни"
 
 IMPORTANT for nickname matching:
 - Match variations: "гусь", "гуся", "гусем" → the user with "гусь" alias
@@ -226,6 +237,12 @@ class QuestionParser:
             sort_order = "relevance"
 
         search_query = raw_response.get("search_query", question)
+
+        # Expand entity aliases (зе -> Зеленський, порох -> Порошенко, etc.)
+        search_query_expanded = expand_query_with_aliases(search_query)
+        if search_query_expanded != search_query:
+            logger.info(f"Expanded aliases: '{search_query}' -> '{search_query_expanded}'")
+            search_query = search_query_expanded
 
         logger.info(f"Parsed question: '{question}' -> search_query: '{search_query}'")
 

@@ -18,6 +18,7 @@ from telegram.ext import Application
 import config
 from db import Database
 from search import VectorStore, EmbeddingService
+from search.entity_aliases import init_entity_aliases
 from bot import setup_handlers
 from indexer import Indexer
 
@@ -45,6 +46,9 @@ def run_bot():
     db = Database(config.SQLITE_DB_PATH)
     embedding_service = EmbeddingService()
     vector_store = VectorStore(embedding_service=embedding_service)
+
+    # Initialize entity aliases with database
+    init_entity_aliases(db)
 
     # Check if database has messages
     stats = db.get_stats()

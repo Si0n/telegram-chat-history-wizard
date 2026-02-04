@@ -159,10 +159,21 @@ class Indexer:
         """
         Create embeddings for messages that don't have them.
         Long messages are split into chunks.
-        Accumulates embeddings before adding to ChromaDB to reduce index overhead.
+        Uses parallel API calls and large ChromaDB batch inserts for performance.
+
+        Optimized for 8GB RAM with:
+        - Larger message fetch batches (batch_size * 4)
+        - Parallel embedding API calls (EMBEDDING_WORKERS)
+        - Large ChromaDB batch inserts (CHROMA_BATCH_SIZE)
         """
+        import time
+
         batch_size = batch_size or config.EMBEDDING_BATCH_SIZE
-        chroma_batch_size = getattr(config, 'CHROMA_BATCH_SIZE', 500)
+        chroma_batch_size = getattr(config, 'CHROMA_BATCH_SIZE', 2500)
+        embedding_workers = getattr(config, 'EMBEDDING_WORKERS', 3)
+
+        # Fetch larger batches from DB (we'll process in parallel)
+        fetch_batch_size = batch_size * embedding_workers
 
         # Get total counts for progress display
         db_stats = self.db.get_stats()
@@ -170,11 +181,12 @@ class Indexer:
         already_embedded = db_stats.get("embedded_messages", 0)
         remaining = total_messages - already_embedded
 
-        logger.info(f"=== Embedding Progress ===")
+        logger.info(f"=== Embedding Progress (Optimized for 8GB RAM) ===")
         logger.info(f"Total messages: {total_messages:,}")
         logger.info(f"Already embedded: {already_embedded:,}")
         logger.info(f"Remaining: {remaining:,}")
-        logger.info(f"==========================")
+        logger.info(f"Batch size: {batch_size} | Workers: {embedding_workers} | ChromaDB batch: {chroma_batch_size}")
+        logger.info(f"==================================================")
 
         stats = {
             "total_embedded": 0,
@@ -185,8 +197,6 @@ class Indexer:
             "remaining_start": remaining
         }
 
-        # Timing for ETA calculation
-        import time
         start_time = time.time()
 
         # Accumulators for ChromaDB batch insert
@@ -200,9 +210,9 @@ class Indexer:
         fetched_ids = set()
 
         while True:
-            # Get messages without embeddings (excluding already fetched)
+            # Get messages without embeddings (larger batch for parallel processing)
             messages = self.db.get_messages_without_embeddings(
-                limit=batch_size,
+                limit=fetch_batch_size,
                 exclude_ids=fetched_ids
             )
 
@@ -217,10 +227,13 @@ class Indexer:
             texts = []
             db_ids = []
             metadatas = []
+            msg_ids_with_text = []
 
             for msg in messages:
                 if not msg.text or not msg.text.strip():
                     continue
+
+                msg_ids_with_text.append(msg.id)
 
                 # Split long messages into chunks
                 chunks = self._chunk_text(msg.text)
@@ -251,16 +264,20 @@ class Indexer:
                 gc.collect()
                 continue
 
-            # Generate embeddings (OpenAI API call)
-            logger.info(f"Generating embeddings for {len(texts)} chunks...")
-            embeddings = self.embedding_service.embed_batch(texts)
+            # Generate embeddings with parallel API calls
+            logger.info(f"Generating embeddings for {len(texts)} chunks ({embedding_workers} parallel workers)...")
+            embeddings = self.embedding_service.embed_parallel(
+                texts,
+                batch_size=batch_size,
+                max_workers=embedding_workers
+            )
 
             # Accumulate for ChromaDB batch insert
             acc_texts.extend(texts)
             acc_db_ids.extend(db_ids)
             acc_metadatas.extend(metadatas)
             acc_embeddings.extend(embeddings)
-            acc_message_ids.extend([m.id for m in messages if m.text])
+            acc_message_ids.extend(msg_ids_with_text)
 
             stats["total_embedded"] += len(messages)
             stats["total_chunks"] += len(texts)

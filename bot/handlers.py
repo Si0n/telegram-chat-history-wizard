@@ -23,6 +23,11 @@ from search.embeddings import ChatService
 from search.question_parser import QuestionParser
 from search.answer_synthesizer import AnswerSynthesizer
 from search.search_agent import SearchAgent
+from search.entity_aliases import (
+    reload_aliases as reload_entity_aliases,
+    ENTITY_ALIASES,
+    HARDCODED_ALIASES
+)
 from ingestion import ExportUploader
 from .formatters import MessageFormatter
 from .conversation_context import ConversationContext
@@ -1557,6 +1562,124 @@ class BotHandlers:
             f"Пропущено (вже існують): {skipped}"
         )
 
+    # === Entity Alias Commands (зе → Зеленський, порох → Порошенко) ===
+
+    async def entity_aliases(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /entity_aliases command - list all entity aliases."""
+        try:
+            # Get database aliases
+            db_aliases = self.db.get_all_entity_aliases()
+
+            # Format response
+            lines = ["📚 **Аліаси сутностей** (сленг → канонічна форма)\n"]
+
+            # Group by category
+            by_category: dict[str, list] = {}
+            for alias in db_aliases:
+                cat = alias.category or "інше"
+                if cat not in by_category:
+                    by_category[cat] = []
+                by_category[cat].append(alias)
+
+            # Count hardcoded
+            hardcoded_count = len(HARDCODED_ALIASES)
+            db_count = len(db_aliases)
+
+            lines.append(f"📊 Всього: {len(ENTITY_ALIASES)} ({hardcoded_count} вбудованих + {db_count} користувацьких)\n")
+
+            if db_aliases:
+                lines.append("**Користувацькі аліаси:**")
+                for cat, aliases in sorted(by_category.items()):
+                    lines.append(f"\n_{cat.capitalize()}:_")
+                    for a in aliases:
+                        lines.append(f"  • {a.alias} → {a.canonical}")
+            else:
+                lines.append("_Користувацьких аліасів ще немає._")
+
+            lines.append("\n**Команди:**")
+            lines.append("/entity_alias <аліас> <канонічна форма> [категорія]")
+            lines.append("/entity_alias_remove <аліас>")
+
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+        except Exception as e:
+            logger.error(f"Entity aliases error: {e}")
+            await update.message.reply_text(f"❌ Помилка: {e}")
+
+    async def add_entity_alias(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /entity_alias command - add entity alias."""
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "❌ Вкажіть аліас та канонічну форму\n\n"
+                "Приклад: /entity_alias зелупа Зеленський політик\n"
+                "Приклад: /entity_alias шиба shiba крипта"
+            )
+            return
+
+        alias = context.args[0].lower()
+        canonical = context.args[1]
+        category = context.args[2] if len(context.args) > 2 else None
+        user_id = update.message.from_user.id
+
+        try:
+            # Check if it's a hardcoded alias
+            if alias in HARDCODED_ALIASES:
+                await update.message.reply_text(
+                    f"❌ Аліас '{alias}' вже вбудований (→ {HARDCODED_ALIASES[alias]})"
+                )
+                return
+
+            success, message = self.db.add_entity_alias(
+                alias=alias,
+                canonical=canonical,
+                category=category,
+                added_by=user_id
+            )
+
+            if success:
+                # Reload aliases to apply changes
+                reload_entity_aliases()
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"❌ {message}")
+
+        except Exception as e:
+            logger.error(f"Add entity alias error: {e}")
+            await update.message.reply_text(f"❌ Помилка: {e}")
+
+    async def remove_entity_alias(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /entity_alias_remove command."""
+        if not context.args:
+            await update.message.reply_text(
+                "❌ Вкажіть аліас для видалення\n"
+                "Приклад: /entity_alias_remove зелупа"
+            )
+            return
+
+        alias = context.args[0].lower()
+        user_id = update.message.from_user.id
+
+        try:
+            # Check if it's a hardcoded alias
+            if alias in HARDCODED_ALIASES:
+                await update.message.reply_text(
+                    f"❌ Аліас '{alias}' вбудований і не може бути видалений"
+                )
+                return
+
+            success, message = self.db.remove_entity_alias(alias, user_id)
+
+            if success:
+                # Reload aliases to apply changes
+                reload_entity_aliases()
+                await update.message.reply_text(f"✅ {message}")
+            else:
+                await update.message.reply_text(f"❌ {message}")
+
+        except Exception as e:
+            logger.error(f"Remove entity alias error: {e}")
+            await update.message.reply_text(f"❌ Помилка: {e}")
+
 
 def setup_handlers(app: Application, db: Database, vector_store: VectorStore):
     """Set up all bot handlers."""
@@ -1584,11 +1707,16 @@ def setup_handlers(app: Application, db: Database, vector_store: VectorStore):
     app.add_handler(CommandHandler("mystats", handlers.mystats))
     app.add_handler(CommandHandler("upload", handlers.upload))
 
-    # Alias management
+    # User alias management (nicknames for chat users)
     app.add_handler(CommandHandler("aliases", handlers.aliases))
     app.add_handler(CommandHandler("alias", handlers.add_alias))
     app.add_handler(CommandHandler("alias_remove", handlers.remove_alias))
     app.add_handler(CommandHandler("seed_aliases", handlers.seed_aliases))
+
+    # Entity alias management (зе → Зеленський, порох → Порошенко)
+    app.add_handler(CommandHandler("entity_aliases", handlers.entity_aliases))
+    app.add_handler(CommandHandler("entity_alias", handlers.add_entity_alias))
+    app.add_handler(CommandHandler("entity_alias_remove", handlers.remove_entity_alias))
 
     # Mention handler (for @bot questions)
     mention_filter = filters.TEXT & filters.Regex(f"(?i)@{BOT_USERNAME}")

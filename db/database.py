@@ -4,7 +4,7 @@ from typing import Optional
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker, Session
 
-from .models import Base, Export, Message, UserAlias
+from .models import Base, Export, Message, UserAlias, EntityAlias
 
 
 class Database:
@@ -532,3 +532,90 @@ class Database:
             "duration_minutes": duration_minutes,
             "message_count": len(messages)
         }
+
+    # === Entity Alias Management ===
+
+    def add_entity_alias(
+        self,
+        alias: str,
+        canonical: str,
+        category: str = None,
+        added_by: int = None
+    ) -> tuple[bool, str]:
+        """
+        Add a new entity alias (slang -> canonical form).
+
+        Returns (success, message).
+        """
+        with self.get_session() as session:
+            alias_lower = alias.lower().strip()
+
+            # Check if alias already exists
+            existing = session.query(EntityAlias).filter(
+                EntityAlias.alias == alias_lower
+            ).first()
+
+            if existing:
+                return False, f"Аліас '{alias}' вже існує для '{existing.canonical}'"
+
+            entity_alias = EntityAlias(
+                alias=alias_lower,
+                canonical=canonical.strip(),
+                category=category,
+                added_by=added_by
+            )
+            session.add(entity_alias)
+            session.commit()
+            return True, f"Додано: '{alias}' → '{canonical}'"
+
+    def remove_entity_alias(self, alias: str, user_id: int = None) -> tuple[bool, str]:
+        """
+        Remove an entity alias.
+
+        If user_id is provided, only removes if they added it (or if no added_by).
+        Returns (success, message).
+        """
+        with self.get_session() as session:
+            alias_lower = alias.lower().strip()
+
+            existing = session.query(EntityAlias).filter(
+                EntityAlias.alias == alias_lower
+            ).first()
+
+            if not existing:
+                return False, f"Аліас '{alias}' не знайдено"
+
+            # Check ownership (allow removal if user added it, or if no owner set)
+            if user_id and existing.added_by and existing.added_by != user_id:
+                return False, f"Аліас '{alias}' додав інший користувач"
+
+            canonical = existing.canonical
+            session.delete(existing)
+            session.commit()
+            return True, f"Видалено: '{alias}' → '{canonical}'"
+
+    def get_all_entity_aliases(self) -> list[EntityAlias]:
+        """Get all entity aliases from the database."""
+        with self.get_session() as session:
+            return session.query(EntityAlias).order_by(
+                EntityAlias.canonical, EntityAlias.alias
+            ).all()
+
+    def get_entity_aliases_dict(self) -> dict[str, str]:
+        """
+        Get entity aliases as dict: {alias: canonical}.
+
+        This is used to merge with hardcoded aliases.
+        """
+        with self.get_session() as session:
+            aliases = session.query(EntityAlias).all()
+            return {a.alias: a.canonical for a in aliases}
+
+    def search_entity_aliases(self, query: str) -> list[EntityAlias]:
+        """Search entity aliases by alias or canonical name."""
+        with self.get_session() as session:
+            query_lower = f"%{query.lower()}%"
+            return session.query(EntityAlias).filter(
+                (EntityAlias.alias.ilike(query_lower)) |
+                (EntityAlias.canonical.ilike(query_lower))
+            ).order_by(EntityAlias.canonical).all()

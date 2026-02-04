@@ -27,6 +27,24 @@ class UserAlias(Base):
     )
 
 
+class EntityAlias(Base):
+    """Entity aliases for public figures, places, topics (зе -> Зеленський)."""
+    __tablename__ = "entity_aliases"
+
+    id = Column(Integer, primary_key=True)
+    alias = Column(String(255), nullable=False)      # Slang/nickname (lowercase)
+    canonical = Column(String(255), nullable=False)  # Full/proper name
+    category = Column(String(50))                    # Optional: politician, crypto, country, etc.
+    added_by = Column(BigInteger)                    # Telegram user_id who added it
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("alias", name="uq_entity_alias"),
+        Index("idx_entity_alias", "alias"),
+        Index("idx_entity_canonical", "canonical"),
+    )
+
+
 class Export(Base):
     """Track processed chat exports for deduplication."""
     __tablename__ = "exports"
