@@ -442,8 +442,14 @@ class BotHandlers:
             aliases_dict = self.db.get_aliases_dict()
             users = self.db.get_all_users()
 
-            # Parse the question with AI
-            parsed = await self.question_parser.parse_async(question, aliases_dict, users)
+            # Get requesting user's Telegram ID for self-reference resolution
+            requesting_user_id = message.from_user.id if message.from_user else None
+
+            # Parse the question with AI (passing user_id for "я/I" resolution)
+            parsed = await self.question_parser.parse_async(
+                question, aliases_dict, users,
+                requesting_user_id=requesting_user_id
+            )
 
             logger.info(f"Parsed question: {parsed}")
 
@@ -1159,8 +1165,14 @@ class BotHandlers:
             aliases_dict = self.db.get_aliases_dict()
             users = self.db.get_all_users()
 
+            # Get requesting user's Telegram ID for self-reference resolution
+            requesting_user_id = query.from_user.id if query.from_user else None
+
             # Parse the suggestion as a new question
-            parsed = await self.question_parser.parse_async(suggestion_query, aliases_dict, users)
+            parsed = await self.question_parser.parse_async(
+                suggestion_query, aliases_dict, users,
+                requesting_user_id=requesting_user_id
+            )
 
             # Perform search with agent
             if parsed.mentioned_users:
@@ -1359,8 +1371,14 @@ class BotHandlers:
             aliases_dict = self.db.get_aliases_dict()
             users = self.db.get_all_users()
 
+            # Get requesting user's Telegram ID for self-reference resolution
+            requesting_user_id = message.from_user.id if message.from_user else None
+
             # Parse the follow-up with context
-            parsed = await self.question_parser.parse_async(question, aliases_dict, users)
+            parsed = await self.question_parser.parse_async(
+                question, aliases_dict, users,
+                requesting_user_id=requesting_user_id
+            )
 
             # Use previous users if none mentioned
             mentioned_users = parsed.mentioned_users or prev_context.mentioned_users

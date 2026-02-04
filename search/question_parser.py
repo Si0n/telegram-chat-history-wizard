@@ -24,6 +24,7 @@ class ParsedQuestion:
     date_from: Optional[str] = None         # ISO date string YYYY-MM-DD
     date_to: Optional[str] = None           # ISO date string YYYY-MM-DD
     sort_order: str = "relevance"           # relevance, oldest, newest
+    self_mentioned_as_subject: bool = False # "про мене" - searching for messages ABOUT the requester
 
 
 SYSTEM_PROMPT = """You are a semantic query expander for a Telegram chat history search bot.
@@ -120,11 +121,86 @@ Question types:
 - comparison: compare what different users said"""
 
 
+# Self-reference patterns: "I said" (self as speaker)
+SELF_AS_SPEAKER_PATTERNS = [
+    # Ukrainian: я казав, я писав, я говорив
+    r'\bя\s+каза', r'\bя\s+писа', r'\bя\s+говори', r'\bя\s+думав', r'\bя\s+вважа',
+    r'\bчи\s+я\b', r'\bколи\s+я\b', r'\bде\s+я\b', r'\bщо\s+я\b',
+    # Russian: я говорил, я писал, я сказал
+    r'\bя\s+говори', r'\bя\s+писа', r'\bя\s+сказа', r'\bя\s+дума', r'\bя\s+счита',
+    r'\bговорил\s+ли\s+я\b', r'\bписал\s+ли\s+я\b', r'\bсказал\s+ли\s+я\b',
+    r'\bкогда\s+я\b', r'\bгде\s+я\b', r'\bчто\s+я\b',
+    # English
+    r'\bi\s+said', r'\bi\s+wrote', r'\bdid\s+i\s+say', r'\bhave\s+i\b',
+    r'\bwhen\s+i\b', r'\bwhere\s+i\b', r'\bwhat\s+i\b',
+]
+
+# Self-reference patterns: "about me" (self as subject/target)
+SELF_AS_SUBJECT_PATTERNS = [
+    # Ukrainian: про мене, обо мені, мене згадував
+    r'\bпро\s+мене\b', r'\bобо\s+мен[еі]\b', r'\bмене\s+згадув', r'\bщодо\s+мене\b',
+    r'\bна\s+мене\b', r'\bмені\s+казав', r'\bмені\s+говорив', r'\bмені\s+писав',
+    # Russian: обо мне, про меня, меня упоминал
+    r'\bобо\s+мне\b', r'\bпро\s+меня\b', r'\bменя\s+упомин', r'\bнасчет\s+меня\b',
+    r'\bо\s+мне\b', r'\bна\s+меня\b', r'\bмне\s+говорил', r'\bмне\s+писал', r'\bмне\s+сказал',
+    r'\bменя\s+называ', r'\bменя\s+обсужда',
+    # English
+    r'\babout\s+me\b', r'\bmentioned\s+me\b', r'\btalked\s+about\s+me\b',
+    r'\bcalled\s+me\b', r'\btold\s+me\b',
+]
+
+# General self-reference (fallback)
+SELF_REFERENCE_PATTERNS = [
+    # Ukrainian
+    r'\bя\b', r'\bмене\b', r'\bмені\b', r'\bмною\b', r'\bмій\b', r'\bмоя\b', r'\bмоє\b', r'\bмої\b',
+    # Russian
+    r'\bменя\b', r'\bмне\b', r'\bмной\b', r'\bмоё\b',
+    # English
+    r'\bi\b', r'\bme\b', r'\bmy\b', r'\bmyself\b',
+]
+
+SELF_AS_SPEAKER_REGEX = re.compile('|'.join(SELF_AS_SPEAKER_PATTERNS), re.IGNORECASE)
+SELF_AS_SUBJECT_REGEX = re.compile('|'.join(SELF_AS_SUBJECT_PATTERNS), re.IGNORECASE)
+SELF_REFERENCE_REGEX = re.compile('|'.join(SELF_REFERENCE_PATTERNS), re.IGNORECASE)
+
+
 class QuestionParser:
     """Parse natural language questions about chat history."""
 
     def __init__(self):
         self.chat_service = ChatService()
+
+    def _detect_self_reference(self, question: str) -> tuple[bool, bool, bool]:
+        """
+        Check if the question contains self-references.
+
+        Returns:
+            (has_self_ref, is_speaker, is_subject)
+            - has_self_ref: Any self-reference found
+            - is_speaker: "я казав" - self as the message author
+            - is_subject: "про мене" - searching for messages ABOUT self
+        """
+        is_speaker = bool(SELF_AS_SPEAKER_REGEX.search(question))
+        is_subject = bool(SELF_AS_SUBJECT_REGEX.search(question))
+        has_any = is_speaker or is_subject or bool(SELF_REFERENCE_REGEX.search(question))
+
+        return has_any, is_speaker, is_subject
+
+    def _find_user_by_telegram_id(
+        self,
+        telegram_user_id: int,
+        users: list
+    ) -> Optional[tuple[int, str]]:
+        """
+        Find a user in the chat history by their Telegram user_id.
+
+        Note: telegram_user_id is the ID of the person asking the question.
+        We need to find if they have messages in our history.
+        """
+        for user_id, username in users:
+            if user_id == telegram_user_id:
+                return (user_id, username)
+        return None
 
     def _build_users_context(self, aliases_dict: dict, users: list) -> str:
         """Build context string describing users and their aliases."""
@@ -187,9 +263,18 @@ class QuestionParser:
         self,
         question: str,
         aliases_dict: dict,
-        users: list
+        users: list,
+        requesting_user_id: int = None
     ) -> ParsedQuestion:
-        """Parse a question using AI to extract structured info."""
+        """
+        Parse a question using AI to extract structured info.
+
+        Args:
+            question: The question text
+            aliases_dict: User aliases mapping
+            users: List of (user_id, username) tuples from chat history
+            requesting_user_id: Telegram user_id of the person asking (for self-reference resolution)
+        """
         users_context = self._build_users_context(aliases_dict, users)
         system_prompt = SYSTEM_PROMPT.format(users_context=users_context)
 
@@ -223,6 +308,35 @@ class QuestionParser:
             users
         )
 
+        # Handle self-references (я, мене, I, me, etc.)
+        self_mentioned_as_subject = False
+        self_name_for_query = None
+
+        if requesting_user_id:
+            has_self_ref, is_speaker, is_subject = self._detect_self_reference(question)
+
+            if has_self_ref:
+                requesting_user = self._find_user_by_telegram_id(requesting_user_id, users)
+
+                if requesting_user:
+                    user_id, username = requesting_user
+
+                    if is_subject:
+                        # "про мене" - searching for messages ABOUT the requester
+                        # Don't filter by user_id, but add their name to search query
+                        self_mentioned_as_subject = True
+                        self_name_for_query = username
+                        logger.info(f"Self-as-subject detected: will search for messages about '{username}'")
+
+                    elif is_speaker or not mentioned_users:
+                        # "я казав" or generic self-reference with no other users
+                        # Filter by the requester's user_id
+                        if requesting_user not in mentioned_users:
+                            mentioned_users.insert(0, requesting_user)
+                            logger.info(f"Self-as-speaker detected: filtering by {username} (ID: {user_id})")
+                else:
+                    logger.warning(f"Self-reference detected but user {requesting_user_id} not found in chat history")
+
         # Extract date constraints (normalize null/None)
         date_from = raw_response.get("date_from")
         date_to = raw_response.get("date_to")
@@ -244,6 +358,11 @@ class QuestionParser:
             logger.info(f"Expanded aliases: '{search_query}' -> '{search_query_expanded}'")
             search_query = search_query_expanded
 
+        # Add self's name to search query if "про мене" pattern detected
+        if self_name_for_query and self_name_for_query.lower() not in search_query.lower():
+            search_query = f"{search_query} {self_name_for_query}"
+            logger.info(f"Added self name to query: '{search_query}'")
+
         logger.info(f"Parsed question: '{question}' -> search_query: '{search_query}'")
 
         return ParsedQuestion(
@@ -254,18 +373,20 @@ class QuestionParser:
             raw_response=raw_response,
             date_from=date_from,
             date_to=date_to,
-            sort_order=sort_order
+            sort_order=sort_order,
+            self_mentioned_as_subject=self_mentioned_as_subject
         )
 
     def parse(
         self,
         question: str,
         aliases_dict: dict,
-        users: list
+        users: list,
+        requesting_user_id: int = None
     ) -> ParsedQuestion:
         """Sync version of parse."""
         import asyncio
-        return asyncio.run(self.parse_async(question, aliases_dict, users))
+        return asyncio.run(self.parse_async(question, aliases_dict, users, requesting_user_id))
 
     async def generate_suggestions_async(
         self,
