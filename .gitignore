@@ -67,3 +67,4 @@ Thumbs.db
 
 # Uploads (temporary)
 _upload_*.zip
+*.session
