@@ -171,7 +171,8 @@ class BotHandlers:
                 )
                 return
 
-            context_msgs = self.db.get_thread_context(message_id)
+            # Get related context (filtered by topic relevance)
+            context_msgs = await self._get_related_context(target, message_id)
             response = self.formatter.format_context(target, context_msgs)
             await update.message.reply_text(response)
 
@@ -397,7 +398,8 @@ class BotHandlers:
                 await query.message.reply_text(f"❌ Повідомлення #{message_id} не знайдено")
                 return
 
-            context_msgs = self.db.get_thread_context(message_id)
+            # Get related context (filtered by topic relevance)
+            context_msgs = await self._get_related_context(target, message_id)
 
             # Get cached search query for highlighting
             search_query = self._search_query_cache.get(message_id)
@@ -412,6 +414,50 @@ class BotHandlers:
         except Exception as e:
             logger.error(f"Context callback error: {e}")
             await query.message.reply_text(f"❌ Помилка: {e}")
+
+    async def _get_related_context(self, target, message_id: int, max_context: int = 10) -> list:
+        """Get context messages filtered by topic relevance."""
+        if not target.text or len(target.text.strip()) < 10:
+            # For very short messages, fall back to chronological context
+            return self.db.get_thread_context(message_id, before=5, after=5)
+
+        # Get a wider range of messages chronologically (±100 message IDs)
+        wide_context = self.db.get_thread_context(message_id, before=100, after=100)
+        if len(wide_context) <= max_context:
+            return wide_context
+
+        # Use vector search to find messages related to target's topic
+        # Search within the time range of the wide context
+        try:
+            related_results = self.vector_store.search(
+                query=target.text,
+                n_results=max_context * 2,  # Get more, then filter by ID range
+                min_similarity=0.3
+            )
+
+            # Get message IDs that are both related AND in our time window
+            wide_context_ids = {m.message_id for m in wide_context}
+            related_ids = set()
+            for r in related_results:
+                msg_id = r.get("metadata", {}).get("message_id")
+                if msg_id and msg_id in wide_context_ids:
+                    related_ids.add(msg_id)
+
+            # Always include the target message
+            related_ids.add(message_id)
+
+            # Filter wide_context to only related messages
+            if related_ids:
+                context_msgs = [m for m in wide_context if m.message_id in related_ids]
+                # Sort by message_id to maintain chronological order
+                context_msgs.sort(key=lambda m: m.message_id)
+                return context_msgs[:max_context]
+
+        except Exception as e:
+            logger.warning(f"Vector search for context failed: {e}")
+
+        # Fallback to chronological context
+        return self.db.get_thread_context(message_id, before=5, after=5)
 
     async def handle_followup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle follow-up questions (replies to bot messages)."""

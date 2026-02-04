@@ -141,6 +141,7 @@ class MessageFormatter:
         """Format conversation context around a message with optional highlighting."""
         lines = [
             f"💬 Контекст повідомлення #{target_msg.message_id}",
+            f"🔗 Пов'язані повідомлення ({len(context_messages)})",
         ]
 
         if search_query:
