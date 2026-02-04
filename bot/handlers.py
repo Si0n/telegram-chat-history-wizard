@@ -287,6 +287,10 @@ class BotHandlers:
                     date_to=parsed.date_to
                 )
 
+            # Apply sorting if requested
+            if parsed.sort_order != "relevance":
+                all_results = self._sort_results(all_results, parsed.sort_order)
+
             # Synthesize answer using AI
             synthesized = await self.answer_synthesizer.synthesize_async(
                 question=parsed.original_question,
@@ -300,7 +304,8 @@ class BotHandlers:
                 synthesized=synthesized,
                 mentioned_users=parsed.mentioned_users,
                 date_from=parsed.date_from,
-                date_to=parsed.date_to
+                date_to=parsed.date_to,
+                sort_order=parsed.sort_order
             )
 
             # Build context buttons for supporting quotes
@@ -330,6 +335,27 @@ class BotHandlers:
         except Exception as e:
             logger.error(f"Mention handler error: {e}", exc_info=True)
             await message.reply_text(f"❌ Помилка обробки питання: {e}")
+
+    def _sort_results(self, results: list[dict], sort_order: str) -> list[dict]:
+        """Sort results by date."""
+        def get_timestamp(result):
+            meta = result.get("metadata", {})
+            ts = meta.get("timestamp_unix")
+            if ts:
+                return int(ts)
+            # Fallback: parse formatted_date
+            formatted = meta.get("formatted_date", "")
+            if formatted:
+                try:
+                    from datetime import datetime
+                    dt = datetime.strptime(formatted.split()[0], "%d.%m.%Y")
+                    return int(dt.timestamp())
+                except ValueError:
+                    pass
+            return 0
+
+        reverse = (sort_order == "newest")
+        return sorted(results, key=get_timestamp, reverse=reverse)
 
     def _build_context_keyboard(self, quotes: list[dict]) -> InlineKeyboardMarkup:
         """Build inline keyboard with context buttons for quotes."""

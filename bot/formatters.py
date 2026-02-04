@@ -297,23 +297,30 @@ class MessageFormatter:
         synthesized,
         mentioned_users: list[tuple[int, str]] = None,
         date_from: str = None,
-        date_to: str = None
+        date_to: str = None,
+        sort_order: str = "relevance"
     ) -> str:
         """Format AI-synthesized answer with supporting quotes."""
         lines = [
             f"❓ {question}",
         ]
 
-        # Show date filter if applied
-        if date_from or date_to:
-            date_str = ""
-            if date_from and date_to:
-                date_str = f"📅 Період: {date_from} — {date_to}"
-            elif date_from:
-                date_str = f"📅 Після: {date_from}"
-            elif date_to:
-                date_str = f"📅 До: {date_to}"
-            lines.append(date_str)
+        # Show filters if applied
+        filters = []
+        if date_from and date_to:
+            filters.append(f"📅 {date_from} — {date_to}")
+        elif date_from:
+            filters.append(f"📅 після {date_from}")
+        elif date_to:
+            filters.append(f"📅 до {date_to}")
+
+        if sort_order == "oldest":
+            filters.append("⬆️ старі спочатку")
+        elif sort_order == "newest":
+            filters.append("⬇️ нові спочатку")
+
+        if filters:
+            lines.append(" | ".join(filters))
 
         lines.extend([
             "━" * 30,

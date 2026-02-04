@@ -19,6 +19,7 @@ class ParsedQuestion:
     raw_response: dict                       # Full AI response for debugging
     date_from: Optional[str] = None         # ISO date string YYYY-MM-DD
     date_to: Optional[str] = None           # ISO date string YYYY-MM-DD
+    sort_order: str = "relevance"           # relevance, oldest, newest
 
 
 SYSTEM_PROMPT = """You are a semantic query parser for a Telegram chat history search bot.
@@ -71,6 +72,12 @@ Extract date ranges if mentioned in the question:
 
 Today's date is 2026-02-04. Use this for relative dates like "останній рік", "минулого місяця".
 
+SORTING:
+Detect if user wants specific order:
+- "старі спочатку", "від старих", "хронологічно", "oldest first" → sort_order: "oldest"
+- "нові спочатку", "від нових", "останні", "newest first" → sort_order: "newest"
+- Default (by relevance) → sort_order: "relevance"
+
 Respond ONLY with valid JSON:
 {{
     "mentioned_users": ["username1"],
@@ -78,7 +85,8 @@ Respond ONLY with valid JSON:
     "question_type": "quote_search|yes_no|summary|comparison",
     "confidence": "high|medium|low",
     "date_from": "YYYY-MM-DD or null",
-    "date_to": "YYYY-MM-DD or null"
+    "date_to": "YYYY-MM-DD or null",
+    "sort_order": "relevance|oldest|newest"
 }}
 
 Question types:
@@ -199,6 +207,11 @@ class QuestionParser:
         if date_to in ("null", "None", None, ""):
             date_to = None
 
+        # Extract sort order
+        sort_order = raw_response.get("sort_order", "relevance")
+        if sort_order not in ("relevance", "oldest", "newest"):
+            sort_order = "relevance"
+
         return ParsedQuestion(
             mentioned_users=mentioned_users,
             search_query=raw_response.get("search_query", question),
@@ -206,7 +219,8 @@ class QuestionParser:
             original_question=question,
             raw_response=raw_response,
             date_from=date_from,
-            date_to=date_to
+            date_to=date_to,
+            sort_order=sort_order
         )
 
     def parse(
