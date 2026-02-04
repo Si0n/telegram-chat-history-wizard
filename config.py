@@ -30,7 +30,7 @@ EMBEDDING_BATCH_SIZE = 250      # Messages per batch for OpenAI API (was 100)
 CHROMA_BATCH_SIZE = 2500        # Accumulate before adding to ChromaDB (was 500)
 MAX_MESSAGE_LENGTH = 6000       # Max chars per chunk (embedding model limit ~8k tokens)
 CHUNK_OVERLAP = 200             # Overlap between chunks for context
-EMBEDDING_WORKERS = 3           # Parallel embedding API calls
+EMBEDDING_WORKERS = 2           # Parallel embedding API calls (3 hits rate limits)
 
 # Search
 DEFAULT_SEARCH_LIMIT = 5
