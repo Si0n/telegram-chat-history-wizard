@@ -164,11 +164,30 @@ class Indexer:
         batch_size = batch_size or config.EMBEDDING_BATCH_SIZE
         chroma_batch_size = getattr(config, 'CHROMA_BATCH_SIZE', 500)
 
+        # Get total counts for progress display
+        db_stats = self.db.get_stats()
+        total_messages = db_stats.get("total_messages", 0)
+        already_embedded = db_stats.get("embedded_messages", 0)
+        remaining = total_messages - already_embedded
+
+        logger.info(f"=== Embedding Progress ===")
+        logger.info(f"Total messages: {total_messages:,}")
+        logger.info(f"Already embedded: {already_embedded:,}")
+        logger.info(f"Remaining: {remaining:,}")
+        logger.info(f"==========================")
+
         stats = {
             "total_embedded": 0,
             "total_chunks": 0,
-            "batches_processed": 0
+            "batches_processed": 0,
+            "total_messages": total_messages,
+            "already_embedded": already_embedded,
+            "remaining_start": remaining
         }
+
+        # Timing for ETA calculation
+        import time
+        start_time = time.time()
 
         # Accumulators for ChromaDB batch insert
         acc_texts = []
@@ -269,7 +288,23 @@ class Indexer:
                 progress_callback(stats)
 
             mem_mb = get_memory_mb()
-            logger.info(f"Embedded {stats['total_embedded']} messages ({stats['total_chunks']} chunks), mem: {mem_mb:.0f}MB")
+            done = already_embedded + stats['total_embedded']
+            remaining_now = total_messages - done
+            pct = (done / total_messages * 100) if total_messages > 0 else 0
+
+            # Calculate ETA
+            elapsed = time.time() - start_time
+            if stats['total_embedded'] > 0 and elapsed > 0:
+                rate = stats['total_embedded'] / elapsed  # msgs per second
+                eta_seconds = remaining_now / rate if rate > 0 else 0
+                eta_min = int(eta_seconds // 60)
+                eta_sec = int(eta_seconds % 60)
+                eta_str = f"ETA: {eta_min}m {eta_sec}s" if eta_min < 60 else f"ETA: {eta_min//60}h {eta_min%60}m"
+            else:
+                eta_str = "ETA: calculating..."
+                rate = 0
+
+            logger.info(f"Progress: {done:,}/{total_messages:,} ({pct:.1f}%) | Remaining: {remaining_now:,} | {rate:.1f} msg/s | {eta_str} | Mem: {mem_mb:.0f}MB")
 
             del texts, embeddings, metadatas, db_ids, messages
             gc.collect()
