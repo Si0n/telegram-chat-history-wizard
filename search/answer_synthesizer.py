@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from search.embeddings import ChatService
+from search.language_utils import detect_language, get_system_prompt, get_ui_string
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,16 @@ class AnswerSynthesizer:
         self,
         question: str,
         results: list[dict],
-        min_score: int = 5
+        min_score: int = 5,
+        language: str = None
     ) -> list[dict]:
         """Filter results by AI-judged relevance to the question."""
         if not results:
             return []
+
+        # Detect language if not provided
+        if not language:
+            language = detect_language(question)
 
         # Format messages for relevance check
         messages_text = []
@@ -84,9 +90,12 @@ Messages to evaluate:
 Rate each message's relevance (0-10) to the question. Return JSON array of scores."""
 
         try:
+            # Get language-specific prompt
+            system_prompt = get_system_prompt("relevance", language)
+
             response = await self.chat_service.complete_async(
                 prompt=prompt,
-                system=RELEVANCE_SYSTEM_PROMPT,
+                system=system_prompt,
                 max_tokens=200
             )
 
@@ -140,35 +149,63 @@ Rate each message's relevance (0-10) to the question. Return JSON array of score
         filter_relevance: bool = True
     ) -> SynthesizedAnswer:
         """Generate an AI answer based on search results."""
+        # Detect language
+        language = detect_language(question)
+
         if not results:
             return SynthesizedAnswer(
-                answer="❌ Не знайдено релевантних повідомлень для відповіді на це питання.",
+                answer=get_ui_string("no_results", language),
                 confidence="low",
                 supporting_quotes=[],
-                summary="Пошук не дав результатів."
+                summary=get_ui_string("search_failed", language)
             )
 
         # Filter by relevance first
         if filter_relevance and len(results) > 3:
-            results = await self.filter_by_relevance(question, results, min_score=5)
+            results = await self.filter_by_relevance(question, results, min_score=5, language=language)
 
             if not results:
                 return SynthesizedAnswer(
-                    answer="❌ Знайдені повідомлення не відповідають на питання. Спробуйте переформулювати запит.",
+                    answer=get_ui_string("no_relevant", language),
                     confidence="low",
                     supporting_quotes=[],
-                    summary="Результати не пройшли фільтр релевантності."
+                    summary=get_ui_string("relevance_failed", language)
                 )
 
         # Format context
         messages_context = self._format_messages_for_context(results)
 
-        user_context = ""
-        if mentioned_users:
-            names = [u[1] for u in mentioned_users]
-            user_context = f"\nПитання стосується користувача(ів): {', '.join(names)}\n"
+        # Build prompt based on language
+        if language == "ru":
+            user_context = ""
+            if mentioned_users:
+                names = [u[1] for u in mentioned_users]
+                user_context = f"\nВопрос касается пользователя(ей): {', '.join(names)}\n"
+            prompt = f"""Вопрос: {question}
+{user_context}
+Найденные сообщения из истории чата:
 
-        prompt = f"""Питання: {question}
+{messages_context}
+
+На основе этих сообщений, дай ответ на вопрос. Начни с прямого ответа (Да/Нет/Частично), затем объясни."""
+        elif language == "en":
+            user_context = ""
+            if mentioned_users:
+                names = [u[1] for u in mentioned_users]
+                user_context = f"\nQuestion is about user(s): {', '.join(names)}\n"
+            prompt = f"""Question: {question}
+{user_context}
+Found messages from chat history:
+
+{messages_context}
+
+Based on these messages, answer the question. Start with a direct answer (Yes/No/Partially), then explain."""
+        else:  # Ukrainian default
+            user_context = ""
+            if mentioned_users:
+                names = [u[1] for u in mentioned_users]
+                user_context = f"\nПитання стосується користувача(ів): {', '.join(names)}\n"
+            prompt = f"""Питання: {question}
 {user_context}
 Знайдені повідомлення з історії чату:
 
@@ -176,9 +213,12 @@ Rate each message's relevance (0-10) to the question. Return JSON array of score
 
 На основі цих повідомлень, дай відповідь на питання. Почни з прямої відповіді (Так/Ні/Частково), потім поясни."""
 
+        # Get language-specific system prompt
+        system_prompt = get_system_prompt("answer", language)
+
         response = await self.chat_service.complete_async(
             prompt=prompt,
-            system=ANSWER_SYSTEM_PROMPT,
+            system=system_prompt,
             max_tokens=800
         )
 
@@ -209,3 +249,112 @@ Rate each message's relevance (0-10) to the question. Return JSON array of score
         """Sync version."""
         import asyncio
         return asyncio.run(self.synthesize_async(question, results, mentioned_users, filter_relevance))
+
+    async def synthesize_stream_async(
+        self,
+        question: str,
+        results: list[dict],
+        mentioned_users: list[tuple[int, str]] = None,
+        filter_relevance: bool = True
+    ):
+        """
+        Streaming version of synthesize_async.
+        Yields (chunk_type, content) tuples:
+        - ("answer_chunk", text) - streaming answer text
+        - ("done", SynthesizedAnswer) - final result with metadata
+        """
+        # Detect language
+        language = detect_language(question)
+
+        if not results:
+            yield ("done", SynthesizedAnswer(
+                answer=get_ui_string("no_results", language),
+                confidence="low",
+                supporting_quotes=[],
+                summary=get_ui_string("search_failed", language)
+            ))
+            return
+
+        # Filter by relevance first (non-streaming part)
+        if filter_relevance and len(results) > 3:
+            results = await self.filter_by_relevance(question, results, min_score=5, language=language)
+
+            if not results:
+                yield ("done", SynthesizedAnswer(
+                    answer=get_ui_string("no_relevant", language),
+                    confidence="low",
+                    supporting_quotes=[],
+                    summary=get_ui_string("relevance_failed", language)
+                ))
+                return
+
+        # Format context
+        messages_context = self._format_messages_for_context(results)
+
+        # Build prompt based on language
+        if language == "ru":
+            user_context = ""
+            if mentioned_users:
+                names = [u[1] for u in mentioned_users]
+                user_context = f"\nВопрос касается пользователя(ей): {', '.join(names)}\n"
+            prompt = f"""Вопрос: {question}
+{user_context}
+Найденные сообщения из истории чата:
+
+{messages_context}
+
+На основе этих сообщений, дай ответ на вопрос. Начни с прямого ответа (Да/Нет/Частично), затем объясни."""
+        elif language == "en":
+            user_context = ""
+            if mentioned_users:
+                names = [u[1] for u in mentioned_users]
+                user_context = f"\nQuestion is about user(s): {', '.join(names)}\n"
+            prompt = f"""Question: {question}
+{user_context}
+Found messages from chat history:
+
+{messages_context}
+
+Based on these messages, answer the question. Start with a direct answer (Yes/No/Partially), then explain."""
+        else:  # Ukrainian default
+            user_context = ""
+            if mentioned_users:
+                names = [u[1] for u in mentioned_users]
+                user_context = f"\nПитання стосується користувача(ів): {', '.join(names)}\n"
+            prompt = f"""Питання: {question}
+{user_context}
+Знайдені повідомлення з історії чату:
+
+{messages_context}
+
+На основі цих повідомлень, дай відповідь на питання. Почни з прямої відповіді (Так/Ні/Частково), потім поясни."""
+
+        # Get language-specific system prompt
+        system_prompt = get_system_prompt("answer", language)
+
+        # Stream the response
+        full_response = ""
+        async for chunk in self.chat_service.complete_stream_async(
+            prompt=prompt,
+            system=system_prompt,
+            max_tokens=800
+        ):
+            full_response += chunk
+            yield ("answer_chunk", chunk)
+
+        # Extract top 3 most relevant quotes for display
+        supporting_quotes = results[:3]
+
+        # Determine confidence based on relevance scores if available
+        if supporting_quotes and "relevance_score" in supporting_quotes[0]:
+            avg_score = sum(q.get("relevance_score", 5) for q in supporting_quotes) / len(supporting_quotes)
+            confidence = "high" if avg_score >= 7 else "medium" if avg_score >= 5 else "low"
+        else:
+            confidence = "high" if len(results) >= 3 else "medium" if results else "low"
+
+        yield ("done", SynthesizedAnswer(
+            answer=full_response,
+            confidence=confidence,
+            supporting_quotes=supporting_quotes,
+            summary=full_response[:200] + "..." if len(full_response) > 200 else full_response
+        ))

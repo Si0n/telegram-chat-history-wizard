@@ -73,6 +73,245 @@ class MessageFormatter:
         return "\n".join(lines)
 
     @staticmethod
+    def format_paginated_results(
+        question: str,
+        results: list[dict],
+        current_page: int,
+        total_pages: int,
+        total_results: int
+    ) -> str:
+        """Format paginated search results."""
+        if not results:
+            return f"🔍 \"{question}\"\n\nНічого не знайдено."
+
+        lines = [
+            f"🔍 \"{question}\"",
+            f"📊 Знайдено {total_results} повідомлень (стор. {current_page}/{total_pages})",
+            "━" * 30
+        ]
+
+        for i, result in enumerate(results, 1):
+            meta = result.get("metadata", {})
+            username = meta.get("display_name", "Unknown")
+            date = meta.get("formatted_date", "Unknown date")
+            text = result.get("text", "")
+            msg_id = meta.get("message_id", "")
+
+            # Truncate long messages
+            if len(text) > 400:
+                text = text[:400] + "..."
+
+            # Calculate global index
+            start_idx = (current_page - 1) * 5
+            global_idx = start_idx + i
+
+            lines.append("")
+            lines.append(f"[{global_idx}] 👤 {username}")
+            lines.append(f"📅 {date}")
+            lines.append(f"> {text}")
+
+        lines.append("")
+        lines.append("━" * 30)
+        lines.append("💡 Використовуй кнопки для навігації")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_filtered_results(
+        question: str,
+        results: list[dict],
+        filter_label: str = None,
+        total_results: int = 0
+    ) -> str:
+        """Format search results with active time filter."""
+        if not results:
+            filter_str = f" ({filter_label})" if filter_label else ""
+            return f"🔍 \"{question}\"{filter_str}\n\n❌ Немає повідомлень за цей період."
+
+        lines = [
+            f"🔍 \"{question}\"",
+        ]
+
+        filter_str = f"📅 {filter_label}" if filter_label else ""
+        if filter_str:
+            lines.append(filter_str)
+
+        lines.append(f"📊 Знайдено {total_results} повідомлень")
+        lines.append("━" * 30)
+
+        for i, result in enumerate(results, 1):
+            meta = result.get("metadata", {})
+            username = meta.get("display_name", "Unknown")
+            date = meta.get("formatted_date", "Unknown date")
+            text = result.get("text", "")
+
+            if len(text) > 400:
+                text = text[:400] + "..."
+
+            lines.append("")
+            lines.append(f"[{i}] 👤 {username}")
+            lines.append(f"📅 {date}")
+            lines.append(f"> {text}")
+
+        lines.append("")
+        lines.append("━" * 30)
+        lines.append("💡 Використовуй кнопки для фільтрації")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_user_stats(
+        user_stats: list[dict],
+        hourly_distribution: dict[int, int],
+        total_messages: int = 0
+    ) -> str:
+        """Format user statistics dashboard."""
+        lines = [
+            "📊 Статистика користувачів",
+            "━" * 30,
+            ""
+        ]
+
+        if total_messages:
+            lines.append(f"📨 Всього повідомлень: {total_messages:,}")
+            lines.append("")
+
+        # Top users by message count
+        if user_stats:
+            lines.append("🏆 Топ-10 за повідомленнями:")
+            medals = ["🥇", "🥈", "🥉"]
+
+            for i, user in enumerate(user_stats[:10], 1):
+                medal = medals[i-1] if i <= 3 else f"{i}."
+                username = user.get("display_name", "Unknown")
+                count = user.get("message_count", 0)
+
+                # Format date range
+                first = user.get("first_message")
+                last = user.get("last_message")
+                date_range = ""
+                if first and last:
+                    try:
+                        first_str = first.strftime("%d.%m.%y") if hasattr(first, 'strftime') else str(first)[:10]
+                        last_str = last.strftime("%d.%m.%y") if hasattr(last, 'strftime') else str(last)[:10]
+                        date_range = f" ({first_str} - {last_str})"
+                    except Exception:
+                        pass
+
+                lines.append(f"{medal} @{username}: {count:,}{date_range}")
+
+        # Hourly activity chart
+        if hourly_distribution:
+            lines.append("")
+            lines.append("━" * 30)
+            lines.append("⏰ Активність за годинами:")
+            lines.append("")
+
+            # Find max for scaling
+            max_count = max(hourly_distribution.values()) if hourly_distribution.values() else 1
+
+            # Group into 4-hour blocks for compact display
+            blocks = [
+                ("00-04", sum(hourly_distribution.get(h, 0) for h in range(0, 4))),
+                ("04-08", sum(hourly_distribution.get(h, 0) for h in range(4, 8))),
+                ("08-12", sum(hourly_distribution.get(h, 0) for h in range(8, 12))),
+                ("12-16", sum(hourly_distribution.get(h, 0) for h in range(12, 16))),
+                ("16-20", sum(hourly_distribution.get(h, 0) for h in range(16, 20))),
+                ("20-24", sum(hourly_distribution.get(h, 0) for h in range(20, 24))),
+            ]
+
+            block_max = max(b[1] for b in blocks) if blocks else 1
+
+            for label, count in blocks:
+                bar_length = int((count / block_max) * 10) if block_max > 0 else 0
+                bar = "█" * bar_length + "░" * (10 - bar_length)
+                lines.append(f"{label}: {bar} {count:,}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_thread(
+        thread_data: dict,
+        summary: str = None,
+        max_messages: int = 15
+    ) -> str:
+        """Format conversation thread display."""
+        messages = thread_data.get("messages", [])
+        participants = thread_data.get("participants", set())
+        duration = thread_data.get("duration_minutes", 0)
+        total_count = thread_data.get("message_count", len(messages))
+
+        lines = [
+            f"🧵 Розмова ({total_count} повідомлень)",
+            f"👥 Учасники: {len(participants)}",
+        ]
+
+        if duration > 0:
+            if duration < 60:
+                lines.append(f"⏱️ Тривалість: {duration} хв")
+            else:
+                hours = duration // 60
+                mins = duration % 60
+                lines.append(f"⏱️ Тривалість: {hours} год {mins} хв")
+
+        lines.append("━" * 30)
+
+        # Add summary if provided
+        if summary:
+            lines.append("")
+            lines.append("📝 Короткий зміст:")
+            for point in summary.split("\n"):
+                if point.strip():
+                    lines.append(f"• {point.strip()}")
+            lines.append("")
+            lines.append("━" * 30)
+
+        # Build reply tree structure
+        reply_map = {}  # message_id -> reply_to_id
+        for msg in messages:
+            if msg.reply_to_message_id:
+                reply_map[msg.message_id] = msg.reply_to_message_id
+
+        # Display messages with indentation for replies
+        displayed = 0
+        for msg in messages:
+            if displayed >= max_messages:
+                remaining = total_count - displayed
+                if remaining > 0:
+                    lines.append(f"\n... ще {remaining} повідомлень")
+                break
+
+            # Determine indentation level based on reply chain
+            indent = ""
+            if msg.message_id in reply_map:
+                indent = "└ "
+
+            username = msg.username or f"User#{msg.user_id}" if msg.user_id else "Unknown"
+            date = msg.formatted_date if hasattr(msg, 'formatted_date') else str(msg.timestamp)[:16]
+
+            text = msg.text or "[медіа/стікер]"
+            if len(text) > 300:
+                text = text[:300] + "..."
+
+            lines.append("")
+            lines.append(f"{indent}👤 @{username} ({date})")
+            lines.append(f"{indent}  {text}")
+
+            displayed += 1
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_thread_summary_prompt(messages: list) -> str:
+        """Format messages for thread summarization."""
+        lines = []
+        for msg in messages[:20]:  # Limit for API
+            username = msg.username or f"User#{msg.user_id}" if msg.user_id else "Unknown"
+            text = msg.text[:200] if msg.text else "[non-text]"
+            lines.append(f"{username}: {text}")
+        return "\n".join(lines)
+
+    @staticmethod
     def format_flip_result(result) -> str:
         """Format flip detection result."""
         if not result.messages:
@@ -300,15 +539,13 @@ uТегни мене з питанням:
         return "\n".join(lines)
 
     @staticmethod
-    def format_synthesized_answer(
+    def format_synthesized_answer_header(
         question: str,
-        synthesized,
-        mentioned_users: list[tuple[int, str]] = None,
         date_from: str = None,
         date_to: str = None,
         sort_order: str = "relevance"
     ) -> str:
-        """Format AI-synthesized answer with supporting quotes."""
+        """Format header for streamed answer (without the answer content)."""
         lines = [
             f"❓ {question}",
         ]
@@ -333,8 +570,19 @@ uТегни мене з питанням:
         lines.extend([
             "━" * 30,
             "",
-            f"🤖 {synthesized.answer}",
+            "🤖 ",
         ])
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_synthesized_answer_with_answer(
+        header: str,
+        answer: str,
+        synthesized
+    ) -> str:
+        """Format complete answer combining header, streamed answer, and quotes."""
+        lines = [header.rstrip() + answer]
 
         # Add supporting quotes if available
         if synthesized.supporting_quotes:
@@ -361,3 +609,25 @@ uТегни мене з питанням:
         lines.append("💡 Відповідай на це повідомлення для уточнення")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def format_synthesized_answer(
+        question: str,
+        synthesized,
+        mentioned_users: list[tuple[int, str]] = None,
+        date_from: str = None,
+        date_to: str = None,
+        sort_order: str = "relevance"
+    ) -> str:
+        """Format AI-synthesized answer with supporting quotes."""
+        header = MessageFormatter.format_synthesized_answer_header(
+            question=question,
+            date_from=date_from,
+            date_to=date_to,
+            sort_order=sort_order
+        )
+        return MessageFormatter.format_synthesized_answer_with_answer(
+            header=header,
+            answer=synthesized.answer,
+            synthesized=synthesized
+        )

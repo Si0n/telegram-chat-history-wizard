@@ -110,3 +110,26 @@ class ChatService:
             temperature=0.3
         )
         return response.choices[0].message.content
+
+    async def complete_stream_async(
+        self,
+        prompt: str,
+        system: str = None,
+        max_tokens: int = 1000
+    ):
+        """Async streaming chat completion. Yields content chunks."""
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        response = await self.async_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            stream=True
+        )
+        async for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content

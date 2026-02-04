@@ -249,3 +249,77 @@ class QuestionParser:
         """Sync version of parse."""
         import asyncio
         return asyncio.run(self.parse_async(question, aliases_dict, users))
+
+    async def generate_suggestions_async(
+        self,
+        question: str,
+        results: list[dict],
+        max_suggestions: int = 3
+    ) -> list[str]:
+        """
+        Generate follow-up question suggestions based on search results.
+
+        Args:
+            question: Original question
+            results: Search results with text and metadata
+            max_suggestions: Maximum number of suggestions to generate
+
+        Returns:
+            List of suggested follow-up questions
+        """
+        if not results:
+            return []
+
+        # Extract topics/keywords from results
+        topics = set()
+        usernames = set()
+        for result in results[:5]:
+            meta = result.get("metadata", {})
+            username = meta.get("display_name")
+            if username:
+                usernames.add(username)
+            # Simple keyword extraction from text
+            text = result.get("text", "")[:200]
+            words = [w for w in text.split() if len(w) > 4 and w.isalpha()]
+            topics.update(words[:3])
+
+        topics_str = ", ".join(list(topics)[:10])
+        users_str = ", ".join(list(usernames)[:5])
+
+        prompt = f"""Based on this search question and found topics, suggest 2-3 related follow-up questions in the same language as the original question.
+
+Original question: {question}
+Related topics found: {topics_str}
+Users mentioned: {users_str}
+
+Generate SHORT follow-up questions (under 50 chars) that would help explore the topic further.
+Questions should be natural and useful for chat history search.
+
+Respond ONLY with JSON array of strings:
+["question1", "question2", "question3"]"""
+
+        system = """You generate search suggestions for a chat history bot.
+Rules:
+1. Match the language of the original question (Ukrainian, Russian, or English)
+2. Keep suggestions short (under 50 characters)
+3. Make them specific and actionable
+4. Focus on "who said what" or "when did they discuss" patterns
+5. Return ONLY valid JSON array"""
+
+        try:
+            response = await self.chat_service.complete_async(
+                prompt=prompt,
+                system=system,
+                max_tokens=200
+            )
+
+            # Parse JSON response
+            json_match = re.search(r'\[.*\]', response, re.DOTALL)
+            if json_match:
+                suggestions = json.loads(json_match.group())
+                return suggestions[:max_suggestions]
+
+        except Exception as e:
+            logger.warning(f"Failed to generate suggestions: {e}")
+
+        return []

@@ -1,6 +1,7 @@
 """
 Track conversation context for follow-up questions.
 """
+import hashlib
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -16,6 +17,44 @@ class ConversationState:
     results: list[dict]
     bot_message_id: int
     created_at: float = field(default_factory=time.time)
+
+    # Pagination state (Feature 2)
+    all_results: list[dict] = field(default_factory=list)  # Full result set
+    current_page: int = 1
+    results_per_page: int = 5
+
+    # Date filter state (Feature 5)
+    active_date_filter: Optional[str] = None  # "today", "week", "month", "2024", etc.
+
+    # Suggestions state (Feature 4)
+    suggestions: list[str] = field(default_factory=list)
+    suggestion_hashes: dict = field(default_factory=dict)  # hash -> full query
+
+    @property
+    def total_pages(self) -> int:
+        """Calculate total pages based on all results."""
+        if not self.all_results:
+            return 1
+        return max(1, (len(self.all_results) + self.results_per_page - 1) // self.results_per_page)
+
+    def get_page_results(self, page: int = None) -> list[dict]:
+        """Get results for current or specified page."""
+        if page is None:
+            page = self.current_page
+        start = (page - 1) * self.results_per_page
+        end = start + self.results_per_page
+        return self.all_results[start:end]
+
+    def add_suggestion(self, query: str) -> str:
+        """Add a suggestion and return its hash."""
+        h = hashlib.md5(query.encode()).hexdigest()[:8]
+        self.suggestion_hashes[h] = query
+        self.suggestions.append(query)
+        return h
+
+    def get_suggestion_by_hash(self, hash_str: str) -> Optional[str]:
+        """Get suggestion query by hash."""
+        return self.suggestion_hashes.get(hash_str)
 
 
 class ConversationContext:
@@ -34,9 +73,12 @@ class ConversationContext:
         original_question: str,
         search_query: str,
         mentioned_users: list[tuple[int, str]],
-        results: list[dict]
-    ) -> None:
-        """Store conversation context."""
+        results: list[dict],
+        all_results: list[dict] = None,
+        current_page: int = 1,
+        active_date_filter: str = None
+    ) -> ConversationState:
+        """Store conversation context and return the state."""
         self._cleanup_old()
 
         state = ConversationState(
@@ -45,9 +87,13 @@ class ConversationContext:
             search_query=search_query,
             mentioned_users=mentioned_users,
             results=results,
-            bot_message_id=bot_message_id
+            bot_message_id=bot_message_id,
+            all_results=all_results if all_results is not None else results,
+            current_page=current_page,
+            active_date_filter=active_date_filter
         )
         self._contexts[(chat_id, bot_message_id)] = state
+        return state
 
     def get(self, chat_id: int, reply_to_message_id: int) -> Optional[ConversationState]:
         """Get conversation context by reply_to_message_id."""
@@ -59,6 +105,23 @@ class ConversationContext:
             return None
 
         return state
+
+    def get_by_context_key(self, context_key: str) -> Optional[ConversationState]:
+        """Get conversation context by context key (chat_id_msg_id format)."""
+        try:
+            chat_id, msg_id = context_key.split("_")
+            return self.get(int(chat_id), int(msg_id))
+        except (ValueError, AttributeError):
+            return None
+
+    def make_context_key(self, chat_id: int, msg_id: int) -> str:
+        """Create a context key from chat_id and message_id."""
+        return f"{chat_id}_{msg_id}"
+
+    def update_state(self, state: ConversationState) -> None:
+        """Update an existing state in the context store."""
+        key = (state.chat_id, state.bot_message_id)
+        self._contexts[key] = state
 
     def _cleanup_old(self) -> None:
         """Remove expired contexts."""
