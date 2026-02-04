@@ -3,10 +3,20 @@ Index chat exports into the database and vector store.
 """
 import gc
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 import config
+
+
+def get_memory_mb() -> float:
+    """Get current process memory usage in MB."""
+    try:
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
+    except ImportError:
+        return 0.0
 from db import Database, Export
 from search import EmbeddingService, VectorStore
 from ingestion.parser import TelegramExportParser, find_exports
@@ -149,14 +159,23 @@ class Indexer:
         """
         Create embeddings for messages that don't have them.
         Long messages are split into chunks.
+        Accumulates embeddings before adding to ChromaDB to reduce index overhead.
         """
         batch_size = batch_size or config.EMBEDDING_BATCH_SIZE
+        chroma_batch_size = getattr(config, 'CHROMA_BATCH_SIZE', 500)
 
         stats = {
             "total_embedded": 0,
             "total_chunks": 0,
             "batches_processed": 0
         }
+
+        # Accumulators for ChromaDB batch insert
+        acc_texts = []
+        acc_db_ids = []
+        acc_metadatas = []
+        acc_embeddings = []
+        acc_message_ids = []
 
         while True:
             # Get messages without embeddings
@@ -194,46 +213,69 @@ class Indexer:
                     metadatas.append(meta)
 
             if not texts:
-                break
-
-            if not texts:
                 # All messages in batch were empty, mark them as embedded anyway
                 self.db.mark_messages_embedded(
                     message_ids=[m.id for m in messages],
                     vector_ids=[]
                 )
+                del messages
+                gc.collect()
                 continue
 
-            # Generate embeddings
+            # Generate embeddings (OpenAI API call)
             logger.info(f"Generating embeddings for {len(texts)} chunks...")
             embeddings = self.embedding_service.embed_batch(texts)
 
-            # Store in vector DB
-            vector_ids = self.vector_store.add_messages(
-                db_ids=db_ids,
-                texts=texts,
-                metadatas=metadatas,
-                embeddings=embeddings
-            )
-
-            # Mark as embedded
-            self.db.mark_messages_embedded(
-                message_ids=[m.id for m in messages if m.text],
-                vector_ids=vector_ids
-            )
+            # Accumulate for ChromaDB batch insert
+            acc_texts.extend(texts)
+            acc_db_ids.extend(db_ids)
+            acc_metadatas.extend(metadatas)
+            acc_embeddings.extend(embeddings)
+            acc_message_ids.extend([m.id for m in messages if m.text])
 
             stats["total_embedded"] += len(messages)
             stats["total_chunks"] += len(texts)
             stats["batches_processed"] += 1
 
+            # Add to ChromaDB when accumulated enough
+            if len(acc_texts) >= chroma_batch_size:
+                logger.info(f"Adding {len(acc_texts)} vectors to ChromaDB...")
+                vector_ids = self.vector_store.add_messages(
+                    db_ids=acc_db_ids,
+                    texts=acc_texts,
+                    metadatas=acc_metadatas,
+                    embeddings=acc_embeddings
+                )
+                self.db.mark_messages_embedded(
+                    message_ids=acc_message_ids,
+                    vector_ids=vector_ids
+                )
+                # Clear accumulators
+                acc_texts, acc_db_ids, acc_metadatas, acc_embeddings, acc_message_ids = [], [], [], [], []
+                gc.collect()
+
             if progress_callback:
                 progress_callback(stats)
 
-            logger.info(f"Embedded {stats['total_embedded']} messages ({stats['total_chunks']} chunks) so far...")
+            mem_mb = get_memory_mb()
+            logger.info(f"Embedded {stats['total_embedded']} messages ({stats['total_chunks']} chunks), mem: {mem_mb:.0f}MB")
 
-            # Clean up memory
             del texts, embeddings, metadatas, db_ids, messages
             gc.collect()
+
+        # Flush remaining accumulated embeddings
+        if acc_texts:
+            logger.info(f"Adding final {len(acc_texts)} vectors to ChromaDB...")
+            vector_ids = self.vector_store.add_messages(
+                db_ids=acc_db_ids,
+                texts=acc_texts,
+                metadatas=acc_metadatas,
+                embeddings=acc_embeddings
+            )
+            self.db.mark_messages_embedded(
+                message_ids=acc_message_ids,
+                vector_ids=vector_ids
+            )
 
         logger.info(f"Embedding complete: {stats}")
         return stats

@@ -26,7 +26,8 @@ SQLITE_DB_PATH = Path(os.getenv("SQLITE_DB_PATH", DATA_DIR / "metadata.db"))
 CHROMA_DB_PATH = Path(os.getenv("CHROMA_DB_PATH", DATA_DIR / "chroma"))
 
 # Processing
-EMBEDDING_BATCH_SIZE = 100  # Messages per batch for embedding
+EMBEDDING_BATCH_SIZE = 100  # Messages per batch for OpenAI API
+CHROMA_BATCH_SIZE = 500     # Accumulate before adding to ChromaDB (reduces index overhead)
 MAX_MESSAGE_LENGTH = 6000   # Max chars per chunk (embedding model limit ~8k tokens)
 CHUNK_OVERLAP = 200         # Overlap between chunks for context
 

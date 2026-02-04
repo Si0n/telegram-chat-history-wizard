@@ -19,3 +19,4 @@ ijson>=3.2
 # Async HTTP
 aiohttp>=3.9
 aiofiles>=23.0
+psutil
