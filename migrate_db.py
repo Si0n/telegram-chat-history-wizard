@@ -6,7 +6,13 @@ Run this once before reindexing.
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("data/chat_history.db")
+try:
+    import config
+    DB_PATH = config.SQLITE_DB_PATH
+except ImportError:
+    DB_PATH = Path("data/chat_history.db")
+
+print(f"Database path: {DB_PATH}")
 
 
 def migrate():
