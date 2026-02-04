@@ -68,3 +68,6 @@ Thumbs.db
 # Uploads (temporary)
 _upload_*.zip
 *.session
+
+# Internal scripts (test, export, migration)
+scripts/
