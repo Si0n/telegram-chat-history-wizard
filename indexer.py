@@ -114,6 +114,33 @@ class Indexer:
         logger.info(f"Export indexed: {stats}")
         return stats
 
+    def _chunk_text(self, text: str, chunk_size: int = None, overlap: int = None) -> list[str]:
+        """Split long text into overlapping chunks."""
+        chunk_size = chunk_size or config.MAX_MESSAGE_LENGTH
+        overlap = overlap or getattr(config, 'CHUNK_OVERLAP', 200)
+
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+
+            # Try to break at sentence/word boundary
+            if end < len(text):
+                # Look for sentence end
+                for sep in ['. ', '! ', '? ', '\n', ' ']:
+                    last_sep = text.rfind(sep, start + chunk_size // 2, end)
+                    if last_sep > start:
+                        end = last_sep + 1
+                        break
+
+            chunks.append(text[start:end].strip())
+            start = end - overlap
+
+        return [c for c in chunks if c]  # Filter empty chunks
+
     def create_embeddings(
         self,
         batch_size: int = None,
@@ -121,11 +148,13 @@ class Indexer:
     ) -> dict:
         """
         Create embeddings for messages that don't have them.
+        Long messages are split into chunks.
         """
         batch_size = batch_size or config.EMBEDDING_BATCH_SIZE
 
         stats = {
             "total_embedded": 0,
+            "total_chunks": 0,
             "batches_processed": 0
         }
 
@@ -136,7 +165,7 @@ class Indexer:
             if not messages:
                 break
 
-            # Prepare batch
+            # Prepare batch with chunking
             texts = []
             db_ids = []
             metadatas = []
@@ -145,22 +174,38 @@ class Indexer:
                 if not msg.text or not msg.text.strip():
                     continue
 
-                texts.append(msg.text)
-                db_ids.append(msg.id)
-                metadatas.append({
-                    "message_id": msg.message_id,
-                    "user_id": msg.user_id or 0,
-                    "username": msg.username or "",
-                    "display_name": msg.display_name,
-                    "timestamp": msg.timestamp.isoformat() if msg.timestamp else "",
-                    "formatted_date": msg.formatted_date
-                })
+                # Split long messages into chunks
+                chunks = self._chunk_text(msg.text)
+
+                for i, chunk in enumerate(chunks):
+                    texts.append(chunk)
+                    db_ids.append(msg.id)
+                    meta = {
+                        "message_id": msg.message_id,
+                        "user_id": msg.user_id or 0,
+                        "username": msg.username or "",
+                        "display_name": msg.display_name,
+                        "timestamp": msg.timestamp.isoformat() if msg.timestamp else "",
+                        "formatted_date": msg.formatted_date
+                    }
+                    if len(chunks) > 1:
+                        meta["chunk"] = i + 1
+                        meta["total_chunks"] = len(chunks)
+                    metadatas.append(meta)
 
             if not texts:
                 break
 
+            if not texts:
+                # All messages in batch were empty, mark them as embedded anyway
+                self.db.mark_messages_embedded(
+                    message_ids=[m.id for m in messages],
+                    vector_ids=[]
+                )
+                continue
+
             # Generate embeddings
-            logger.info(f"Generating embeddings for {len(texts)} messages...")
+            logger.info(f"Generating embeddings for {len(texts)} chunks...")
             embeddings = self.embedding_service.embed_batch(texts)
 
             # Store in vector DB
@@ -177,13 +222,14 @@ class Indexer:
                 vector_ids=vector_ids
             )
 
-            stats["total_embedded"] += len(texts)
+            stats["total_embedded"] += len(messages)
+            stats["total_chunks"] += len(texts)
             stats["batches_processed"] += 1
 
             if progress_callback:
                 progress_callback(stats)
 
-            logger.info(f"Embedded {stats['total_embedded']} messages so far...")
+            logger.info(f"Embedded {stats['total_embedded']} messages ({stats['total_chunks']} chunks) so far...")
 
             # Clean up memory
             del texts, embeddings, metadatas, db_ids, messages

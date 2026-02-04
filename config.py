@@ -18,7 +18,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL = "text-embedding-3-large"  # Better semantic understanding
 CHAT_MODEL = "gpt-4o-mini"
 
 # Database
@@ -26,8 +26,9 @@ SQLITE_DB_PATH = Path(os.getenv("SQLITE_DB_PATH", DATA_DIR / "metadata.db"))
 CHROMA_DB_PATH = Path(os.getenv("CHROMA_DB_PATH", DATA_DIR / "chroma"))
 
 # Processing
-EMBEDDING_BATCH_SIZE = 30  # Messages per batch for embedding (low for memory)
-MAX_MESSAGE_LENGTH = 8000   # Truncate very long messages
+EMBEDDING_BATCH_SIZE = 100  # Messages per batch for embedding
+MAX_MESSAGE_LENGTH = 6000   # Max chars per chunk (embedding model limit ~8k tokens)
+CHUNK_OVERLAP = 200         # Overlap between chunks for context
 
 # Search
 DEFAULT_SEARCH_LIMIT = 5

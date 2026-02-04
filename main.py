@@ -170,34 +170,65 @@ def print_help():
 
 def run_import_only():
     """Import messages without creating embeddings."""
+    import time
     print("=" * 50)
     print("Importing Chat Exports (no embeddings)")
     print("=" * 50)
 
     indexer = Indexer()
-    stats = indexer.index_all_exports()
+    start_time = time.time()
+    last_print = [0]
 
-    print(f"\nExports processed: {stats.get('exports_processed', 0)}")
-    print(f"New messages: {stats.get('total_new_messages', 0)}")
-    print(f"Duplicates skipped: {stats.get('total_duplicates', 0)}")
+    def progress(stats):
+        now = time.time()
+        if now - last_print[0] >= 2:  # Print every 2 seconds
+            elapsed = int(now - start_time)
+            new_msgs = stats.get('new_messages', 0)
+            total = stats.get('total_parsed', 0)
+            rate = new_msgs / max(elapsed, 1)
+            print(f"\r  Progress: {new_msgs:,} new / {total:,} parsed ({rate:.0f}/s)", end="", flush=True)
+            last_print[0] = now
+
+    stats = indexer.index_all_exports(progress_callback=progress)
+    elapsed = int(time.time() - start_time)
+
+    print(f"\n\n{'=' * 50}")
+    print(f"Import complete in {elapsed}s!")
+    print(f"  Exports processed: {stats.get('exports_processed', 0)}")
+    print(f"  New messages: {stats.get('total_new_messages', 0):,}")
+    print(f"  Duplicates skipped: {stats.get('total_duplicates', 0):,}")
     print("\nRun 'python main.py embed' to create embeddings.")
 
 
 def run_embed_only():
     """Create embeddings for messages that don't have them."""
+    import time
     print("=" * 50)
     print("Creating Embeddings")
     print("=" * 50)
 
     indexer = Indexer()
+    start_time = time.time()
+    last_print = [0]
 
     def progress(stats):
-        print(f"  ... {stats.get('total_embedded', 0)} messages embedded")
+        now = time.time()
+        if now - last_print[0] >= 2:  # Print every 2 seconds
+            elapsed = int(now - start_time)
+            embedded = stats.get('total_embedded', 0)
+            chunks = stats.get('total_chunks', 0)
+            rate = embedded / max(elapsed, 1)
+            print(f"\r  Progress: {embedded:,} messages ({chunks:,} chunks) - {rate:.0f} msg/s", end="", flush=True)
+            last_print[0] = now
 
     stats = indexer.create_embeddings(progress_callback=progress)
+    elapsed = int(time.time() - start_time)
 
-    print(f"\nTotal embedded: {stats.get('total_embedded', 0)}")
-    print(f"Batches processed: {stats.get('batches_processed', 0)}")
+    print(f"\n\n{'=' * 50}")
+    print(f"Embedding complete in {elapsed}s!")
+    print(f"  Messages embedded: {stats.get('total_embedded', 0):,}")
+    print(f"  Total chunks: {stats.get('total_chunks', 0):,}")
+    print(f"  Batches processed: {stats.get('batches_processed', 0)}")
 
 
 def main():

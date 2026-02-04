@@ -119,9 +119,7 @@ class TelegramExportParser:
         if not text or not text.strip():
             return None
 
-        # Truncate very long messages
-        if len(text) > config.MAX_MESSAGE_LENGTH:
-            text = text[:config.MAX_MESSAGE_LENGTH] + "..."
+        # Don't truncate - long messages will be chunked during embedding
 
         # Parse user info
         from_field = msg.get("from")

@@ -74,12 +74,16 @@ class VectorStore:
         user_id: int = None,
         username: str = None,
         date_from: str = None,
-        date_to: str = None
+        date_to: str = None,
+        min_similarity: float = 0.0
     ) -> list[dict]:
         """
         Semantic search for messages.
         Returns list of matches with metadata.
         """
+        # Fetch more results than needed for better coverage, then filter
+        fetch_count = max(n_results * 3, 30)
+
         # Generate query embedding
         query_embedding = self.embedding_service.embed_text(query)
 
@@ -97,10 +101,10 @@ class VectorStore:
         elif len(conditions) > 1:
             where_filter = {"$and": conditions}
 
-        # Search
+        # Search (fetch more for better coverage)
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=n_results,
+            n_results=fetch_count,
             where=where_filter,
             include=["documents", "metadatas", "distances"]
         )
@@ -109,19 +113,24 @@ class VectorStore:
         matches = []
         if results and results["ids"] and results["ids"][0]:
             for i, vec_id in enumerate(results["ids"][0]):
+                similarity = 1 - results["distances"][0][i]
+                # Filter by minimum similarity
+                if similarity < min_similarity:
+                    continue
                 matches.append({
                     "vector_id": vec_id,
                     "text": results["documents"][0][i],
                     "metadata": results["metadatas"][0][i],
                     "distance": results["distances"][0][i],
-                    "similarity": 1 - results["distances"][0][i]  # Cosine distance to similarity
+                    "similarity": similarity
                 })
 
         # Apply date filtering (post-search since ChromaDB doesn't handle date ranges well)
         if date_from or date_to:
             matches = self._filter_by_date(matches, date_from, date_to)
 
-        return matches
+        # Return top n_results after all filtering
+        return matches[:n_results]
 
     def _filter_by_date(
         self,

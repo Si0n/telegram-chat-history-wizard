@@ -2,11 +2,14 @@
 AI-powered question parser for natural language queries.
 """
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Optional
 
 from search.embeddings import ChatService
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -22,39 +25,49 @@ class ParsedQuestion:
     sort_order: str = "relevance"           # relevance, oldest, newest
 
 
-SYSTEM_PROMPT = """You are a semantic query parser for a Telegram chat history search bot.
-Your task is to convert user questions in Ukrainian/Russian into effective SEMANTIC search queries.
+SYSTEM_PROMPT = """You are a semantic query expander for a Telegram chat history search bot.
+Your task is to convert user questions into RICH SEMANTIC search queries that will find relevant messages.
 
 The chat has these users with their nicknames:
 {users_context}
 
-CRITICAL: The search uses semantic/vector similarity, NOT keyword matching.
-You must extract the MEANING and INTENT of the question, not just keywords.
+CRITICAL: The search uses EMBEDDING SIMILARITY. You must create a query that will be SEMANTICALLY CLOSE to the messages we want to find.
 
-EXAMPLES of good search_query extraction:
+Think: "What words would actually appear in messages we're looking for?"
+
+EXAMPLES:
 
 Question: "чи гусь казав що порошенко дебіл?"
-BAD search_query: "Порошенко" (too narrow, just a name)
-GOOD search_query: "Порошенко дурний поганий критика образа негативна думка" (captures the semantic intent - looking for insults/criticism)
+Intent: Find messages where someone criticizes/insults Poroshenko
+Messages might contain: "Порошенко ідіот", "він дурень", "поганий президент", "некомпетентний"
+search_query: "Порошенко поганий дурний ідіот некомпетентний президент критика"
 
 Question: "що буш думає про біткоін?"
-BAD search_query: "біткоін" (misses the opinion aspect)
-GOOD search_query: "біткоін думка погляд інвестиція крипта хороший поганий" (captures opinions about bitcoin)
+Intent: Find opinions about bitcoin
+Messages might contain: "біткоін буде рости", "крипта скам", "треба купувати", "я вірю в btc"
+search_query: "біткоін bitcoin крипта криптовалюта інвестиція купувати продавати рости падати думаю вважаю"
 
 Question: "чи серж хвалив зеленського?"
-BAD search_query: "Зеленський"
-GOOD search_query: "Зеленський хороший молодець підтримка позитив похвала" (looking for praise)
+Intent: Find positive statements about Zelensky
+Messages might contain: "Зеленський молодець", "він робить правильно", "підтримую", "хороший президент"
+search_query: "Зеленський молодець хороший правильно підтримую президент позитив"
 
-Question: "коли гусь лаявся на когось?"
-BAD search_query: "лаявся"
-GOOD search_query: "лайка образа мат злість конфлікт сварка" (semantic field of swearing/conflict)
+Question: "хто говорив про війну?"
+Intent: Find any war-related messages
+Messages might contain: "війна", "Україна", "обстріл", "фронт", "ЗСУ", "окупанти", "перемога"
+search_query: "війна Україна обстріл фронт ЗСУ армія бойові перемога окупанти"
 
-RULES for search_query:
-1. Include the main subject/topic (person, thing being discussed)
-2. Add SEMANTIC synonyms that capture the INTENT (criticism → поганий, дурний, критика, негатив)
-3. Include related concepts that might appear in such messages
-4. Write in the same language as the question (Ukrainian/Russian)
-5. Use 5-10 words that form a semantic cluster around the intent
+Question: "що казали про гроші та фінанси?"
+Intent: Find financial discussions
+Messages might contain: "зарплата", "ціни", "курс долара", "інфляція", "інвестиції"
+search_query: "гроші зарплата ціни курс долар євро інфляція інвестиції фінанси бюджет економіка"
+
+RULES:
+1. Include the MAIN TOPIC (person, thing, event)
+2. Add SYNONYMS and RELATED WORDS in both Ukrainian and Russian if relevant
+3. Include words that would ACTUALLY APPEAR in relevant messages
+4. Think about HOW people discuss this topic in casual chat
+5. Use 8-15 words to create a rich semantic field
 
 IMPORTANT for nickname matching:
 - Match variations: "гусь", "гуся", "гусем" → the user with "гусь" alias
@@ -212,9 +225,13 @@ class QuestionParser:
         if sort_order not in ("relevance", "oldest", "newest"):
             sort_order = "relevance"
 
+        search_query = raw_response.get("search_query", question)
+
+        logger.info(f"Parsed question: '{question}' -> search_query: '{search_query}'")
+
         return ParsedQuestion(
             mentioned_users=mentioned_users,
-            search_query=raw_response.get("search_query", question),
+            search_query=search_query,
             question_type=raw_response.get("question_type", "quote_search"),
             original_question=question,
             raw_response=raw_response,
