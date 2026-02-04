@@ -177,12 +177,22 @@ class Indexer:
         acc_embeddings = []
         acc_message_ids = []
 
+        # Track fetched message IDs to avoid re-fetching before ChromaDB insert
+        fetched_ids = set()
+
         while True:
-            # Get messages without embeddings
-            messages = self.db.get_messages_without_embeddings(limit=batch_size)
+            # Get messages without embeddings (excluding already fetched)
+            messages = self.db.get_messages_without_embeddings(
+                limit=batch_size,
+                exclude_ids=fetched_ids
+            )
 
             if not messages:
                 break
+
+            # Track these messages
+            for m in messages:
+                fetched_ids.add(m.id)
 
             # Prepare batch with chunking
             texts = []
@@ -250,8 +260,9 @@ class Indexer:
                     message_ids=acc_message_ids,
                     vector_ids=vector_ids
                 )
-                # Clear accumulators
+                # Clear accumulators and tracking set
                 acc_texts, acc_db_ids, acc_metadatas, acc_embeddings, acc_message_ids = [], [], [], [], []
+                fetched_ids.clear()
                 gc.collect()
 
             if progress_callback:

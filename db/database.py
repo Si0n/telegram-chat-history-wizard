@@ -108,15 +108,19 @@ class Database:
 
     def get_messages_without_embeddings(
         self,
-        limit: int = 100
+        limit: int = 100,
+        exclude_ids: set[int] = None
     ) -> list[Message]:
         """Get messages that haven't been embedded yet."""
         with self.get_session() as session:
-            return session.query(Message).filter(
+            query = session.query(Message).filter(
                 Message.is_embedded == False,
                 Message.text.isnot(None),
                 Message.text != ""
-            ).limit(limit).all()
+            )
+            if exclude_ids:
+                query = query.filter(Message.id.notin_(exclude_ids))
+            return query.limit(limit).all()
 
     def mark_messages_embedded(self, message_ids: list[int], vector_ids: list[str]):
         """Mark messages as embedded with their vector IDs."""
