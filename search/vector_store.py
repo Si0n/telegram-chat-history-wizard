@@ -54,8 +54,14 @@ class VectorStore:
         if embeddings is None:
             embeddings = self.embedding_service.embed_batch(texts)
 
-        # Create unique IDs
-        vector_ids = [f"msg_{db_id}" for db_id in db_ids]
+        # Create unique IDs (include chunk number for chunked messages)
+        vector_ids = []
+        for i, db_id in enumerate(db_ids):
+            chunk = metadatas[i].get("chunk") if metadatas else None
+            if chunk:
+                vector_ids.append(f"msg_{db_id}_c{chunk}")
+            else:
+                vector_ids.append(f"msg_{db_id}")
 
         # Add to collection
         self.collection.add(
