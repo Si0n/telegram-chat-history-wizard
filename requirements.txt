@@ -1,0 +1,21 @@
+# Telegram Bot
+python-telegram-bot>=21.0
+
+# OpenAI
+openai>=1.0
+
+# Vector Database
+chromadb>=0.4
+
+# Database
+sqlalchemy>=2.0
+
+# Environment & Config
+python-dotenv>=1.0
+
+# JSON streaming for large files
+ijson>=3.2
+
+# Async HTTP
+aiohttp>=3.9
+aiofiles>=23.0
