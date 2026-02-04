@@ -73,7 +73,7 @@ python main.py bot
 Tag the bot with a question using nicknames:
 
 ```
-@dobby_the_free_trader_bot чи гусь казав що CCC погана людина?
+@xxx чи гусь казав що CCC погана людина?
 ```
 
 The bot will:
@@ -128,7 +128,7 @@ After starting the bot for the first time:
 
 1. Send `/seed_aliases` to load predefined nicknames
 2. Send `/aliases` to verify they're loaded
-3. Try: `@dobby_the_free_trader_bot що гусь казав про крипту?`
+3. Try: `@xxx що гусь казав про крипту?`
 
 ## Production Deployment
 
