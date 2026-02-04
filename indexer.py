@@ -73,15 +73,19 @@ class Indexer:
         batch = []
         batch_size = 500
 
+        chat_id = metadata.chat_id
+
         for msg in parser.stream_messages():
             stats["total_parsed"] += 1
 
-            # Check for duplicate
-            if self.db.message_exists(msg.message_id):
+            # Check for duplicate (same message_id in same chat)
+            if self.db.message_exists(msg.message_id, chat_id):
                 stats["skipped_duplicates"] += 1
                 continue
 
-            batch.append(msg.to_dict())
+            msg_data = msg.to_dict()
+            msg_data["chat_id"] = chat_id
+            batch.append(msg_data)
 
             # Insert batch
             if len(batch) >= batch_size:

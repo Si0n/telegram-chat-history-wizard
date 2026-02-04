@@ -77,12 +77,13 @@ class Database:
 
     # === Message Management ===
 
-    def message_exists(self, message_id: int) -> bool:
+    def message_exists(self, message_id: int, chat_id: int = None) -> bool:
         """Check if message already indexed (for deduplication)."""
         with self.get_session() as session:
-            return session.query(
-                session.query(Message).filter(Message.message_id == message_id).exists()
-            ).scalar()
+            query = session.query(Message).filter(Message.message_id == message_id)
+            if chat_id:
+                query = query.filter(Message.chat_id == chat_id)
+            return session.query(query.exists()).scalar()
 
     def get_existing_message_ids(self, message_ids: list[int]) -> set[int]:
         """Batch check which message IDs already exist."""

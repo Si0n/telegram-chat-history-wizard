@@ -50,7 +50,8 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True)
-    message_id = Column(BigInteger, nullable=False, unique=True)  # Telegram's message ID
+    message_id = Column(BigInteger, nullable=False)  # Telegram's message ID
+    chat_id = Column(BigInteger, nullable=False)     # Chat ID (for uniqueness across chats)
     export_id = Column(Integer, ForeignKey("exports.id"), nullable=False)
 
     # User info
@@ -74,9 +75,11 @@ class Message(Base):
     export = relationship("Export", back_populates="messages")
 
     __table_args__ = (
+        UniqueConstraint("message_id", "chat_id", name="uq_message_chat"),
         Index("idx_messages_user_id", "user_id"),
         Index("idx_messages_timestamp", "timestamp"),
         Index("idx_messages_message_id", "message_id"),
+        Index("idx_messages_chat_id", "chat_id"),
         Index("idx_messages_reply_to", "reply_to_message_id"),
     )
 
