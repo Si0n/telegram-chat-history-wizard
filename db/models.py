@@ -5,6 +5,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
+import config
+
 
 class Base(DeclarativeBase):
     pass
@@ -144,7 +146,12 @@ class Message(Base):
 
     @property
     def display_name(self) -> str:
-        """Get best available display name for user."""
+        """Get best available display name for user, checking overrides first."""
+        # Check for display name override
+        overrides = getattr(config, 'DISPLAY_NAME_OVERRIDES', {})
+        if self.user_id and self.user_id in overrides:
+            return overrides[self.user_id]
+
         if self.username:
             return f"@{self.username}"
         parts = []

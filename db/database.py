@@ -4,7 +4,16 @@ from typing import Optional
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker, Session
 
+import config
 from .models import Base, Export, Message, UserAlias, EntityAlias, RelevanceCache, SearchFeedback
+
+
+def _get_display_name(user_id: int, username: str) -> str:
+    """Get display name for user, checking overrides first."""
+    overrides = getattr(config, 'DISPLAY_NAME_OVERRIDES', {})
+    if user_id and user_id in overrides:
+        return overrides[user_id]
+    return username or f"User#{user_id}"
 
 
 class Database:
@@ -305,8 +314,8 @@ class Database:
 
             stats = []
             for r in results:
-                # Get display name (prefer username, fallback to user_id)
-                display = r.username or f"User#{r.user_id}"
+                # Get display name (checking overrides first)
+                display = _get_display_name(r.user_id, r.username)
                 stats.append({
                     "user_id": r.user_id,
                     "username": r.username,
@@ -398,7 +407,7 @@ class Database:
 
             return [{
                 "user_id": r.user_id,
-                "username": r.username or f"User#{r.user_id}",
+                "username": _get_display_name(r.user_id, r.username),
                 "message_count": r.message_count
             } for r in results]
 
@@ -781,7 +790,7 @@ class Database:
             ).limit(limit).all()
 
             return [
-                (r.user_id, r.username or f"User#{r.user_id}", r.count)
+                (r.user_id, _get_display_name(r.user_id, r.username), r.count)
                 for r in results
             ]
 
@@ -807,7 +816,7 @@ class Database:
             ).limit(limit).all()
 
             return [
-                (r.user_id, r.username or f"User#{r.user_id}", r.count)
+                (r.user_id, _get_display_name(r.user_id, r.username), r.count)
                 for r in results
             ]
 
@@ -839,7 +848,7 @@ class Database:
             ).limit(limit).all()
 
             return [
-                (r.user_id, r.username or f"User#{r.user_id}", r.count)
+                (r.user_id, _get_display_name(r.user_id, r.username), r.count)
                 for r in results
             ]
 

@@ -49,3 +49,9 @@ ANALYTICS_TOP_LIMIT = 10
 # Forwarded Messages
 PENALIZE_FORWARDS_FACTOR = 0.5
 EXCLUDE_FORWARDS_FOR_SPEAKER_QUERIES = True
+
+# Display Name Overrides
+# Maps user_id -> preferred display name (instead of actual username)
+DISPLAY_NAME_OVERRIDES = {
+    645706876: "гусь",  # Лех Качинський -> гусь
+}

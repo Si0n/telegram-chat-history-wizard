@@ -7,10 +7,19 @@ import logging
 from typing import Any
 from dataclasses import dataclass
 
+import config
 from db import Database
 from search.vector_store import VectorStore
 from search.embeddings import ChatService
 from search.entity_aliases import get_all_forms, get_canonical
+
+
+def _get_display_name(user_id: int, username: str) -> str:
+    """Get display name for user, checking overrides first."""
+    overrides = getattr(config, 'DISPLAY_NAME_OVERRIDES', {})
+    if user_id and user_id in overrides:
+        return overrides[user_id]
+    return username or f"User#{user_id}"
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +69,7 @@ TOOLS_SCHEMA = [
                 },
                 "user_filter": {
                     "type": "string",
-                    "description": "Optional: filter by username"
+                    "description": "Optional: filter by username, @username, user_id, or User#id format"
                 },
                 "limit": {
                     "type": "integer",
@@ -91,13 +100,13 @@ TOOLS_SCHEMA = [
     },
     {
         "name": "get_user_stats",
-        "description": "Get detailed statistics for a specific user.",
+        "description": "Get detailed statistics for a specific user by username or user_id.",
         "parameters": {
             "type": "object",
             "properties": {
                 "username": {
                     "type": "string",
-                    "description": "Username to look up"
+                    "description": "Username, user_id, or User#id format to look up"
                 }
             },
             "required": ["username"]
@@ -188,10 +197,16 @@ class ToolExecutor:
         limit = params.get("limit", 10)
         user_filter = params.get("user_filter")
 
+        # Handle user_filter - could be username, @username, user_id, or User#id
         if user_filter:
+            # Normalize user_filter
+            user_identifier = user_filter.lstrip("@")
+            if user_identifier.startswith("User#"):
+                user_identifier = user_identifier[5:]  # Extract just the number
+
             results = self.vector_store.search_by_user(
                 query=query,
-                user_identifier=user_filter,
+                user_identifier=user_identifier,
                 n_results=limit
             )
         else:
@@ -200,18 +215,32 @@ class ToolExecutor:
                 n_results=limit
             )
 
+        # Apply display name overrides
+        formatted_results = []
+        for r in results:
+            meta = r.get("metadata", {})
+            user_id = meta.get("user_id")
+            username = meta.get("display_name", "Unknown")
+
+            # Apply override if available
+            if user_id:
+                display = _get_display_name(user_id, username)
+            else:
+                display = username
+
+            formatted_results.append({
+                "text": r.get("text", "")[:300],
+                "username": display,
+                "date": meta.get("formatted_date", ""),
+                "similarity": round(r.get("similarity", 0), 3)
+            })
+
         data = {
             "query": query,
-            "results": [
-                {
-                    "text": r.get("text", "")[:300],
-                    "username": r.get("metadata", {}).get("display_name", "Unknown"),
-                    "date": r.get("metadata", {}).get("formatted_date", ""),
-                    "similarity": round(r.get("similarity", 0), 3)
-                }
-                for r in results
-            ],
-            "total_found": len(results)
+            "user_filter": user_filter,
+            "results": formatted_results,
+            "total_found": len(results),
+            "message": "Нічого не знайдено" if not results else None
         }
 
         return ToolResult("search_messages", True, data)
@@ -273,13 +302,32 @@ class ToolExecutor:
         """Get stats for a specific user."""
         username = params.get("username", "").lstrip("@")
 
+        # Check if it's a user_id (e.g., "928442575" or "User#928442575")
+        user_id_match = None
+        if username.startswith("User#"):
+            try:
+                user_id_match = int(username[5:])
+            except ValueError:
+                pass
+        elif username.isdigit():
+            user_id_match = int(username)
+
         # Find user
         users = self.db.get_all_users()
         user_match = None
-        for user_id, uname in users:
-            if uname and uname.lower() == username.lower():
-                user_match = (user_id, uname)
-                break
+
+        if user_id_match:
+            # Search by user_id
+            for uid, uname in users:
+                if uid == user_id_match:
+                    user_match = (uid, uname)
+                    break
+        else:
+            # Search by username
+            for uid, uname in users:
+                if uname and uname.lower() == username.lower():
+                    user_match = (uid, uname)
+                    break
 
         if not user_match:
             return ToolResult("get_user_stats", False, None, f"User '{username}' not found")
@@ -287,8 +335,12 @@ class ToolExecutor:
         user_id, actual_username = user_match
         stats = self.db.get_user_message_stats(user_id)
 
+        # Use display name override if available
+        display_name = _get_display_name(user_id, actual_username)
+
         data = {
-            "username": actual_username,
+            "user_id": user_id,
+            "username": display_name,
             "message_count": stats.get("message_count", 0),
             "first_message": stats.get("first_message").isoformat() if stats.get("first_message") else None,
             "last_message": stats.get("last_message").isoformat() if stats.get("last_message") else None,
@@ -388,9 +440,9 @@ class ToolAgent:
 Доступні інструменти:
 - count_term_mentions: підрахувати скільки разів кожен користувач згадував термін
 - get_top_speakers: отримати топ користувачів за кількістю повідомлень
-- search_messages: семантичний пошук повідомлень
+- search_messages: семантичний пошук повідомлень (можна фільтрувати по user_id)
 - compare_term_mentions: порівняти згадування різних термінів
-- get_user_stats: статистика конкретного користувача
+- get_user_stats: статистика конкретного користувача (по username або user_id)
 
 ВАЖЛИВО про аліаси:
 Система автоматично розширює сленг/прізвиська до всіх форм:
@@ -399,21 +451,32 @@ class ToolAgent:
 - "біток", "btc" → шукає всі форми включно з "біткоін"
 Використовуй терміни як їх написав користувач - система сама знайде всі варіанти.
 
+ВАЖЛИВО про користувачів:
+- Деякі користувачі мають тільки user_id без username (наприклад, User#928442575)
+- Для пошуку по таких користувачах використовуй числовий user_id як user_filter
+- Для search_messages: user_filter="928442575" або user_filter="User#928442575"
+- Для get_user_stats: username="928442575" або username="User#928442575"
+
 Правила:
 1. Для порівняльних питань ("хто більше X чи Y") використовуй compare_term_mentions
 2. Для питань "хто частіше згадує X" використовуй count_term_mentions
 3. Для питань "хто найактивніший" використовуй get_top_speakers
 4. Відповідай українською мовою
 5. НЕ використовуй Markdown (**, ##, тощо). Використовуй тільки:
-   - Емодзі для візуального виділення (📊, 👤, 🏆, 📈)
+   - Емодзі для візуального виділення (📊, 👤, 🏆, 📈, ❌)
    - Прості списки з цифрами (1. 2. 3.)
    - Тире для пунктів
 6. Форматуй відповідь зрозуміло з цифрами та іменами
 7. В результатах вказуй канонічну форму (Зеленський, Порошенко) для ясності
+8. Якщо результатів не знайдено (total_found=0), ОБОВ'ЯЗКОВО повідом про це:
+   "❌ Нічого не знайдено за запитом X" або "❌ Користувач Y не має повідомлень на цю тему"
 
 Приклад формату:
 📊 Згадки "Зеленський" (зе, зеля, зелупа...):
 1. 👤 Username — 100 разів
 2. 👤 Username2 — 50 разів
+
+Приклад коли немає результатів:
+❌ Нічого не знайдено за запитом "тема X"
 
 Після отримання результатів від інструментів, надай чітку відповідь користувачу."""
