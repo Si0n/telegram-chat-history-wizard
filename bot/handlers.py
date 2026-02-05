@@ -1458,8 +1458,8 @@ class BotHandlers:
             # Filter wide_context to only related messages
             if related_ids:
                 context_msgs = [m for m in wide_context if m.message_id in related_ids]
-                # Sort by message_id to maintain chronological order
-                context_msgs.sort(key=lambda m: m.message_id)
+                # Sort by timestamp to maintain chronological order
+                context_msgs.sort(key=lambda m: m.timestamp)
                 return context_msgs[:max_context]
 
         except Exception as e:

@@ -176,7 +176,7 @@ class Database:
         before: int = 5,
         after: int = 5
     ) -> list[Message]:
-        """Get messages around a specific message for context."""
+        """Get messages around a specific message for context, sorted by timestamp."""
         with self.get_session() as session:
             target = session.query(Message).filter(
                 Message.message_id == message_id
@@ -184,11 +184,19 @@ class Database:
             if not target:
                 return []
 
-            # Get messages within range of the target message_id
-            return session.query(Message).filter(
-                Message.message_id >= message_id - before,
-                Message.message_id <= message_id + after
-            ).order_by(Message.message_id).all()
+            # Get messages before the target (by timestamp)
+            before_msgs = session.query(Message).filter(
+                Message.timestamp < target.timestamp
+            ).order_by(Message.timestamp.desc()).limit(before).all()
+
+            # Get messages after the target (by timestamp)
+            after_msgs = session.query(Message).filter(
+                Message.timestamp > target.timestamp
+            ).order_by(Message.timestamp.asc()).limit(after).all()
+
+            # Combine and sort by timestamp
+            all_msgs = before_msgs + [target] + after_msgs
+            return sorted(all_msgs, key=lambda m: m.timestamp)
 
     # === Stats ===
 
@@ -472,7 +480,7 @@ class Database:
                 # Find all messages that reply to this one
                 direct_replies = session.query(Message).filter(
                     Message.reply_to_message_id == current_id
-                ).order_by(Message.message_id).all()
+                ).order_by(Message.timestamp).all()
 
                 for reply in direct_replies:
                     if reply.message_id not in seen_ids:
@@ -480,8 +488,8 @@ class Database:
                         replies.append(reply)
                         queue.append(reply.message_id)
 
-            # Sort by message_id for chronological order
-            replies.sort(key=lambda m: m.message_id)
+            # Sort by timestamp for chronological order
+            replies.sort(key=lambda m: m.timestamp)
             return replies[:max_results]
 
     def get_full_thread(
@@ -514,8 +522,8 @@ class Database:
             if m.message_id not in all_messages:
                 all_messages[m.message_id] = m
 
-        # Sort by message_id
-        messages = sorted(all_messages.values(), key=lambda m: m.message_id)
+        # Sort by timestamp for chronological order
+        messages = sorted(all_messages.values(), key=lambda m: m.timestamp)
 
         # Calculate thread metadata
         participants = set()
