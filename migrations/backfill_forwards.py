@@ -2,19 +2,20 @@
 Migration script to backfill forwarded message metadata for existing messages.
 
 This script:
-1. Reads the original JSON exports
-2. Updates only is_forwarded, forward_from, forward_date columns
-3. Does NOT touch embeddings (fast operation)
+1. Adds new columns if they don't exist (is_forwarded, forward_from, forward_date)
+2. Reads the original JSON exports
+3. Updates only is_forwarded, forward_from, forward_date columns
+4. Does NOT touch embeddings (fast operation)
 
 Usage:
     python -m migrations.backfill_forwards
 """
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
 
 import ijson
+from sqlalchemy import text
 
 import config
 from db import Database
@@ -24,6 +25,30 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def add_columns_if_missing(db: Database):
+    """Add new columns to messages table if they don't exist."""
+    with db.get_session() as session:
+        # Check existing columns
+        result = session.execute(text("PRAGMA table_info(messages)"))
+        existing_columns = {row[1] for row in result.fetchall()}
+
+        # Add missing columns
+        if "is_forwarded" not in existing_columns:
+            logger.info("Adding column: is_forwarded")
+            session.execute(text("ALTER TABLE messages ADD COLUMN is_forwarded BOOLEAN DEFAULT 0"))
+
+        if "forward_from" not in existing_columns:
+            logger.info("Adding column: forward_from")
+            session.execute(text("ALTER TABLE messages ADD COLUMN forward_from VARCHAR(255)"))
+
+        if "forward_date" not in existing_columns:
+            logger.info("Adding column: forward_date")
+            session.execute(text("ALTER TABLE messages ADD COLUMN forward_date DATETIME"))
+
+        session.commit()
+        logger.info("Schema migration complete")
 
 
 def extract_forward_info(msg: dict) -> tuple[bool, str | None, datetime | None]:
@@ -108,6 +133,11 @@ def run_migration(batch_size: int = 1000, dry_run: bool = False):
         dry_run: If True, don't actually update, just count
     """
     db = Database(config.SQLITE_DB_PATH)
+
+    # First, add columns if they don't exist
+    if not dry_run:
+        add_columns_if_missing(db)
+
     exports = find_json_exports()
 
     if not exports:
