@@ -534,10 +534,12 @@ class BotHandlers:
             )
 
             # Fetch brief context for each supporting quote
+            # Skip context fetching when date filters are active (context would be from different dates)
             quotes_with_context = []
+            has_date_filter = parsed.date_from or parsed.date_to
             for quote in synthesized.supporting_quotes[:3]:
                 msg_id = quote.get("metadata", {}).get("message_id")
-                if msg_id:
+                if msg_id and not has_date_filter:
                     context_msgs = self.db.get_thread_context(msg_id, before=2, after=2)
                     quotes_with_context.append({
                         "quote": quote,

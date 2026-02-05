@@ -615,24 +615,33 @@ uТегни мене з питанням:
 
                 meta = quote.get("metadata", {})
                 username = meta.get("display_name", "Unknown")
+                date = meta.get("formatted_date", "Unknown")
                 target_msg_id = meta.get("message_id")
+                quote_text = quote.get("text", "")
 
                 lines.append("")
-                lines.append(f"💬 {username}:")
 
-                # Show context messages with the target highlighted
-                for msg in context_msgs:
-                    msg_username = msg.display_name if hasattr(msg, 'display_name') else "Unknown"
-                    msg_date = msg.formatted_date if hasattr(msg, 'formatted_date') else ""
-                    msg_text = msg.text[:300] if hasattr(msg, 'text') and msg.text else ""
-                    if len(msg_text) == 300:
-                        msg_text += "..."
+                # If no context, show quote directly (cleaner for date-filtered results)
+                if not context_msgs:
+                    if len(quote_text) > 500:
+                        quote_text = quote_text[:500] + "..."
+                    lines.append(f"👤 {username} | 📅 {date}")
+                    lines.append(f"> {quote_text}")
+                else:
+                    # Show context messages with the target highlighted
+                    lines.append(f"💬 {username}:")
+                    for msg in context_msgs:
+                        msg_username = msg.display_name if hasattr(msg, 'display_name') else "Unknown"
+                        msg_date = msg.formatted_date if hasattr(msg, 'formatted_date') else ""
+                        msg_text = msg.text[:300] if hasattr(msg, 'text') and msg.text else ""
+                        if len(msg_text) == 300:
+                            msg_text += "..."
 
-                    is_target = hasattr(msg, 'message_id') and msg.message_id == target_msg_id
-                    marker = "▶️" if is_target else "  "
+                        is_target = hasattr(msg, 'message_id') and msg.message_id == target_msg_id
+                        marker = "▶️" if is_target else "  "
 
-                    lines.append(f"{marker} 👤 {msg_username} | 📅 {msg_date}")
-                    lines.append(f"   > {msg_text}")
+                        lines.append(f"{marker} 👤 {msg_username} | 📅 {msg_date}")
+                        lines.append(f"   > {msg_text}")
 
         elif synthesized.supporting_quotes:
             # Fallback if no context provided
