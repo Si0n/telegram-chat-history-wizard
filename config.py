@@ -18,7 +18,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-EMBEDDING_MODEL = "text-embedding-3-large"  # Better semantic understanding
+EMBEDDING_MODEL = "text-embedding-3-small"  # 1536 dims - matches existing index
 CHAT_MODEL = "gpt-4o-mini"
 
 # Database
