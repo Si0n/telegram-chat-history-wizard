@@ -31,7 +31,13 @@ class VectorStore:
 
         self.collection = self.client.get_or_create_collection(
             name=self.COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"}
+            metadata={
+                "hnsw:space": "cosine",
+                # Memory optimizations for large collections
+                "hnsw:M": 8,  # Reduced from default 16 - less memory
+                "hnsw:construction_ef": 64,  # Reduced from default 100
+                "hnsw:search_ef": 32,  # Reduced for faster searches
+            }
         )
 
         self.embedding_service = embedding_service or EmbeddingService()
@@ -259,5 +265,11 @@ class VectorStore:
         self.client.delete_collection(self.COLLECTION_NAME)
         self.collection = self.client.get_or_create_collection(
             name=self.COLLECTION_NAME,
-            metadata={"hnsw:space": "cosine"}
+            metadata={
+                "hnsw:space": "cosine",
+                # Memory optimizations for large collections
+                "hnsw:M": 8,  # Reduced from default 16 - less memory
+                "hnsw:construction_ef": 64,  # Reduced from default 100
+                "hnsw:search_ef": 32,  # Reduced for faster searches
+            }
         )

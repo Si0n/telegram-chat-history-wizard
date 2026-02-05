@@ -111,6 +111,24 @@ TOOLS_SCHEMA = [
             },
             "required": ["username"]
         }
+    },
+    {
+        "name": "get_user_messages",
+        "description": "Get recent messages from a specific user. Use when asked to show someone's messages without a specific topic.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_identifier": {
+                    "type": "string",
+                    "description": "Username, user_id, or User#id format"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max messages to return (default 10)"
+                }
+            },
+            "required": ["user_identifier"]
+        }
     }
 ]
 
@@ -144,6 +162,8 @@ class ToolExecutor:
                 return self._compare_term_mentions(params)
             elif tool_name == "get_user_stats":
                 return self._get_user_stats(params)
+            elif tool_name == "get_user_messages":
+                return self._get_user_messages(params)
             else:
                 return ToolResult(tool_name, False, None, f"Unknown tool: {tool_name}")
         except Exception as e:
@@ -348,6 +368,80 @@ class ToolExecutor:
 
         return ToolResult("get_user_stats", True, data)
 
+    def _get_user_messages(self, params: dict) -> ToolResult:
+        """Get recent messages from a specific user."""
+        user_identifier = params.get("user_identifier", "").lstrip("@")
+        limit = params.get("limit", 10)
+
+        # Check if it's a user_id (e.g., "928442575" or "User#928442575")
+        user_id_match = None
+        if user_identifier.startswith("User#"):
+            try:
+                user_id_match = int(user_identifier[5:])
+            except ValueError:
+                pass
+        elif user_identifier.startswith("User"):
+            try:
+                user_id_match = int(user_identifier[4:])
+            except ValueError:
+                pass
+        elif user_identifier.isdigit():
+            user_id_match = int(user_identifier)
+
+        # Find user
+        users = self.db.get_all_users()
+        user_match = None
+
+        if user_id_match:
+            # Search by user_id
+            for uid, uname in users:
+                if uid == user_id_match:
+                    user_match = (uid, uname)
+                    break
+        else:
+            # Search by username
+            for uid, uname in users:
+                if uname and uname.lower() == user_identifier.lower():
+                    user_match = (uid, uname)
+                    break
+
+        if not user_match:
+            return ToolResult("get_user_messages", False, None, f"User '{user_identifier}' not found")
+
+        user_id, actual_username = user_match
+
+        # Get messages from database
+        messages = self.db.get_messages_by_user(user_id, limit=limit)
+
+        if not messages:
+            display_name = _get_display_name(user_id, actual_username)
+            return ToolResult("get_user_messages", True, {
+                "user": display_name,
+                "user_id": user_id,
+                "messages": [],
+                "total_found": 0,
+                "message": f"Користувач {display_name} не має повідомлень в базі"
+            })
+
+        # Format messages
+        display_name = _get_display_name(user_id, actual_username)
+        formatted = []
+        for msg in messages:
+            formatted.append({
+                "text": msg.text[:300] if msg.text else "",
+                "date": msg.formatted_date,
+                "message_id": msg.message_id
+            })
+
+        data = {
+            "user": display_name,
+            "user_id": user_id,
+            "messages": formatted,
+            "total_found": len(messages)
+        }
+
+        return ToolResult("get_user_messages", True, data)
+
 
 class ToolAgent:
     """
@@ -443,6 +537,7 @@ class ToolAgent:
 - search_messages: семантичний пошук повідомлень (можна фільтрувати по user_id)
 - compare_term_mentions: порівняти згадування різних термінів
 - get_user_stats: статистика конкретного користувача (по username або user_id)
+- get_user_messages: отримати останні повідомлення від користувача (для "покажи повідомлення від User#123")
 
 ВАЖЛИВО про аліаси:
 Система автоматично розширює сленг/прізвиська до всіх форм:
@@ -461,7 +556,8 @@ class ToolAgent:
 1. Для порівняльних питань ("хто більше X чи Y") використовуй compare_term_mentions
 2. Для питань "хто частіше згадує X" використовуй count_term_mentions
 3. Для питань "хто найактивніший" використовуй get_top_speakers
-4. Відповідай українською мовою
+4. Для "покажи повідомлення від User#123" використовуй get_user_messages з user_identifier="123"
+5. Відповідай українською мовою
 5. НЕ використовуй Markdown (**, ##, тощо). Використовуй тільки:
    - Емодзі для візуального виділення (📊, 👤, 🏆, 📈, ❌)
    - Прості списки з цифрами (1. 2. 3.)

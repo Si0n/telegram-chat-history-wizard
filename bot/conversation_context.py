@@ -60,7 +60,9 @@ class ConversationState:
 class ConversationContext:
     """Track conversation context for follow-up questions."""
 
-    TTL_SECONDS = 3600  # 1 hour
+    TTL_SECONDS = 1800  # 30 minutes (reduced from 1 hour to save memory)
+    MAX_CONTEXTS = 50   # Max stored contexts (prevent unbounded growth)
+    MAX_RESULTS_PER_CONTEXT = 50  # Limit results stored per context
 
     def __init__(self):
         # Map: (chat_id, bot_message_id) -> ConversationState
@@ -81,18 +83,29 @@ class ConversationContext:
         """Store conversation context and return the state."""
         self._cleanup_old()
 
+        # Limit stored results to save memory
+        limited_all_results = (all_results if all_results is not None else results)
+        if len(limited_all_results) > self.MAX_RESULTS_PER_CONTEXT:
+            limited_all_results = limited_all_results[:self.MAX_RESULTS_PER_CONTEXT]
+
         state = ConversationState(
             chat_id=chat_id,
             original_question=original_question,
             search_query=search_query,
             mentioned_users=mentioned_users,
-            results=results,
+            results=results[:10] if results else [],  # Limit display results too
             bot_message_id=bot_message_id,
-            all_results=all_results if all_results is not None else results,
+            all_results=limited_all_results,
             current_page=current_page,
             active_date_filter=active_date_filter
         )
         self._contexts[(chat_id, bot_message_id)] = state
+
+        # Enforce max contexts limit (remove oldest if exceeded)
+        if len(self._contexts) > self.MAX_CONTEXTS:
+            oldest_key = min(self._contexts.keys(), key=lambda k: self._contexts[k].created_at)
+            del self._contexts[oldest_key]
+
         return state
 
     def get(self, chat_id: int, reply_to_message_id: int) -> Optional[ConversationState]:

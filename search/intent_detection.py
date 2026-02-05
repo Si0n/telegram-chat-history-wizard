@@ -78,6 +78,18 @@ INTENT_PATTERNS = {
         r'хто\s+писав\s+про',
         r'кто\s+упоминал',
         r'who\s+mentioned',
+        # User-specific message queries
+        r'покажи\s+повідомлення\s+від',
+        r'повідомлення\s+(від\s+)?user',
+        r'повідомлення\s+користувача',
+        r'що\s+писав\s+user',
+        r'що\s+писала?\s+user',
+        r'сообщения\s+(от\s+)?user',
+        r'сообщения\s+пользователя',
+        r'что\s+писал\s+user',
+        r'messages\s+from\s+user',
+        r'show\s+messages\s+from',
+        r'user#?\d+',  # Match User#123 or User123 patterns
         # Behavioral/Qualitative patterns
         r'хто\s+най\w+ший',
         r'кто\s+самый',

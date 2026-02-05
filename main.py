@@ -12,6 +12,7 @@ Usage:
     python main.py reindex  - Force full reindex
 """
 import sys
+import gc
 import logging
 from telegram.ext import Application
 
@@ -42,10 +43,16 @@ def run_bot():
         print("ERROR: OPENAI_API_KEY not set in .env file")
         sys.exit(1)
 
+    # Aggressive garbage collection to free memory
+    gc.collect()
+
     # Initialize components
     db = Database(config.SQLITE_DB_PATH)
     embedding_service = EmbeddingService()
     vector_store = VectorStore(embedding_service=embedding_service)
+
+    # Free memory after vector store initialization
+    gc.collect()
 
     # Initialize entity aliases with database
     init_entity_aliases(db)
