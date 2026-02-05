@@ -9,8 +9,10 @@ from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime, timedelta
 
+import config
 from search.embeddings import ChatService
 from search.vector_store import VectorStore
+from search.diversity import apply_diversity_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -38,37 +40,11 @@ class SearchSession:
     max_iterations: int = 3
 
 
-# Cache for relevance scores (message_id -> {query_hash: score})
-_relevance_cache: dict[int, dict[str, int]] = {}
-_cache_expiry: datetime = datetime.now()
-CACHE_TTL_HOURS = 24
-
-
 def _get_query_hash(query: str) -> str:
     """Simple hash for query caching."""
     # Normalize and hash
     normalized = " ".join(sorted(query.lower().split()))
     return str(hash(normalized) % 10000000)
-
-
-def _get_cached_relevance(message_id: int, query: str) -> Optional[int]:
-    """Get cached relevance score if available."""
-    global _cache_expiry
-    if datetime.now() > _cache_expiry:
-        _relevance_cache.clear()
-        _cache_expiry = datetime.now() + timedelta(hours=CACHE_TTL_HOURS)
-        return None
-
-    query_hash = _get_query_hash(query)
-    return _relevance_cache.get(message_id, {}).get(query_hash)
-
-
-def _cache_relevance(message_id: int, query: str, score: int):
-    """Cache relevance score."""
-    query_hash = _get_query_hash(query)
-    if message_id not in _relevance_cache:
-        _relevance_cache[message_id] = {}
-    _relevance_cache[message_id][query_hash] = score
 
 
 HYDE_PROMPT = """You are simulating chat messages that would answer a question about chat history.
@@ -151,9 +127,38 @@ Respond with JSON array of scores: [score1, score2, ...]"""
 class SearchAgent:
     """Multi-step search agent with query reformulation, HyDE, and reranking."""
 
-    def __init__(self, vector_store: VectorStore):
+    def __init__(self, vector_store: VectorStore, db=None):
         self.vector_store = vector_store
         self.chat_service = ChatService()
+        self.db = db  # Database for persistent cache
+        self._cache_ttl = getattr(config, 'RELEVANCE_CACHE_TTL_HOURS', 24)
+
+    def _get_cached_relevance(self, message_id: int, query: str) -> Optional[int]:
+        """Get cached relevance score from database if available."""
+        if self.db is None:
+            return None
+        query_hash = _get_query_hash(query)
+        return self.db.get_cached_relevance(message_id, query_hash, self._cache_ttl)
+
+    def _get_cached_relevance_batch(self, message_ids: list[int], query: str) -> dict[int, int]:
+        """Get cached relevance scores for multiple messages."""
+        if self.db is None:
+            return {}
+        query_hash = _get_query_hash(query)
+        return self.db.get_cached_relevance_batch(message_ids, query_hash, self._cache_ttl)
+
+    def _cache_relevance(self, message_id: int, query: str, score: int):
+        """Cache relevance score to database."""
+        if self.db is None:
+            return
+        query_hash = _get_query_hash(query)
+        self.db.cache_relevance(message_id, query_hash, score)
+
+    def _cache_relevance_batch(self, entries: list[tuple[int, str, int]]):
+        """Cache multiple relevance scores to database."""
+        if self.db is None:
+            return
+        self.db.cache_relevance_batch(entries)
 
     async def generate_hyde_documents(self, question: str) -> list[str]:
         """
@@ -252,7 +257,9 @@ class SearchAgent:
         min_relevance_score: int = 5,
         max_iterations: int = 3,
         use_hyde: bool = True,
-        use_reranking: bool = True
+        use_reranking: bool = True,
+        use_diversity: bool = True,
+        diversity_config: dict = None
     ) -> tuple[list[dict], SearchSession]:
         """
         Multi-step search with automatic query reformulation, HyDE, and reranking.
@@ -267,10 +274,18 @@ class SearchAgent:
             max_iterations: Max reformulation attempts
             use_hyde: Use Hypothetical Document Embeddings
             use_reranking: Use LLM reranking for final results
+            use_diversity: Apply diversity filtering (user-based + MMR)
+            diversity_config: Optional dict with max_per_user, lambda_param
 
         Returns:
             (relevant_results, session) - results and search session for debugging
         """
+        # Default diversity config
+        if diversity_config is None:
+            diversity_config = {
+                "max_per_user": getattr(config, 'MAX_RESULTS_PER_USER', 2),
+                "lambda_param": getattr(config, 'DIVERSITY_LAMBDA', 0.7),
+            }
         session = SearchSession(
             original_question=question,
             max_iterations=max_iterations
@@ -328,6 +343,15 @@ class SearchAgent:
 
             # Convert to SearchResult and check cache
             new_candidates = []
+
+            # Batch fetch cached relevance scores
+            msg_ids_to_check = [
+                r.get("metadata", {}).get("message_id", 0)
+                for r in raw_results
+                if r.get("vector_id", "") not in session.all_candidates
+            ]
+            cached_scores = self._get_cached_relevance_batch(msg_ids_to_check, question)
+
             for r in raw_results:
                 vec_id = r.get("vector_id", "")
                 msg_id = r.get("metadata", {}).get("message_id", 0)
@@ -337,7 +361,7 @@ class SearchAgent:
                     continue
 
                 # Check cache for relevance
-                cached_score = _get_cached_relevance(msg_id, question)
+                cached_score = cached_scores.get(msg_id)
 
                 result = SearchResult(
                     vector_id=vec_id,
@@ -360,12 +384,17 @@ class SearchAgent:
             if new_candidates:
                 await self._score_relevance(question, new_candidates)
 
-                # Update cache and collect relevant
+                # Batch cache relevance scores
+                cache_entries = []
+                query_hash = _get_query_hash(question)
                 for result in new_candidates:
                     if result.relevance_score is not None:
-                        _cache_relevance(result.message_id, question, result.relevance_score)
+                        cache_entries.append((result.message_id, query_hash, result.relevance_score))
                         if result.relevance_score >= min_relevance_score:
                             session.relevant_results.append(result)
+
+                if cache_entries:
+                    self._cache_relevance_batch(cache_entries)
 
             # Check if we have enough relevant results
             if len(session.relevant_results) >= min_relevant:
@@ -411,6 +440,20 @@ class SearchAgent:
                 "similarity": r.similarity,
                 "relevance_score": r.relevance_score
             })
+
+        # === Diversity: Apply user diversity and MMR ===
+        if use_diversity and len(results) > 1:
+            logger.info(f"Applying diversity to {len(results)} results...")
+            results = apply_diversity_pipeline(
+                results=results,
+                embeddings=None,  # Use relevance-based selection
+                max_per_user=diversity_config.get("max_per_user", 2),
+                lambda_param=diversity_config.get("lambda_param", 0.7),
+                top_k=min(15, len(results)),
+                use_user_diversity=True,
+                use_mmr=True
+            )
+            logger.info(f"After diversity: {len(results)} results")
 
         return results, session
 

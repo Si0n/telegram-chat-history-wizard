@@ -15,16 +15,28 @@ class MessageFormatter:
         text: str,
         username: str,
         date: str,
-        similarity: float = None
+        similarity: float = None,
+        is_forwarded: bool = False,
+        forward_from: str = None
     ) -> str:
         """Format a single message as a quote."""
         # Truncate long messages
         if len(text) > 500:
             text = text[:500] + "..."
 
-        lines = [
-            f"📅 {date} | {username}"
-        ]
+        # Build header based on whether it's a forward
+        if is_forwarded and forward_from:
+            lines = [
+                f"↪️ 📅 {date} | {username} переслав від {forward_from}"
+            ]
+        elif is_forwarded:
+            lines = [
+                f"↪️ 📅 {date} | {username} (переслано)"
+            ]
+        else:
+            lines = [
+                f"📅 {date} | {username}"
+            ]
 
         if similarity is not None:
             pct = int(similarity * 100)
@@ -585,30 +597,65 @@ uТегни мене з питанням:
     def format_synthesized_answer_with_answer(
         header: str,
         answer: str,
-        synthesized
+        synthesized,
+        quotes_with_context: list[dict] = None
     ) -> str:
-        """Format complete answer combining header, streamed answer, and quotes."""
+        """Format complete answer combining header, streamed answer, and quotes with context."""
         lines = [header.rstrip() + answer]
 
         # Add supporting quotes if available
-        if synthesized.supporting_quotes:
+        if quotes_with_context:
             lines.append("")
             lines.append("━" * 30)
             lines.append("📜 Підтверджуючі цитати:")
 
-            for i, result in enumerate(synthesized.supporting_quotes[:3], 1):
+            for item in quotes_with_context:
+                quote = item["quote"]
+                context_msgs = item.get("context", [])
+
+                meta = quote.get("metadata", {})
+                username = meta.get("display_name", "Unknown")
+                target_msg_id = meta.get("message_id")
+
+                lines.append("")
+                lines.append(f"<quote author=\"{username}\">")
+
+                # Show context messages with the target highlighted
+                for msg in context_msgs:
+                    msg_username = msg.display_name if hasattr(msg, 'display_name') else "Unknown"
+                    msg_date = msg.formatted_date if hasattr(msg, 'formatted_date') else ""
+                    msg_text = msg.text[:300] if hasattr(msg, 'text') and msg.text else ""
+                    if len(msg_text) == 300:
+                        msg_text += "..."
+
+                    is_target = hasattr(msg, 'message_id') and msg.message_id == target_msg_id
+                    marker = "▶️" if is_target else "  "
+
+                    lines.append(f"{marker} 👤 {msg_username} | 📅 {msg_date}")
+                    lines.append(f"   > {msg_text}")
+
+                lines.append("</quote>")
+
+        elif synthesized.supporting_quotes:
+            # Fallback if no context provided
+            lines.append("")
+            lines.append("━" * 30)
+            lines.append("📜 Підтверджуючі цитати:")
+
+            for result in synthesized.supporting_quotes[:3]:
                 meta = result.get("metadata", {})
                 username = meta.get("display_name", "Unknown")
                 date = meta.get("formatted_date", "Unknown")
                 text = result.get("text", "")
 
-                # Show more text (up to 800 chars)
                 if len(text) > 800:
                     text = text[:800] + "..."
 
                 lines.append("")
-                lines.append(f"[{i}] 👤 {username} | 📅 {date}")
+                lines.append(f"<quote author=\"{username}\">")
+                lines.append(f"👤 {username} | 📅 {date}")
                 lines.append(f"> {text}")
+                lines.append("</quote>")
 
         lines.append("")
         lines.append("━" * 30)
@@ -636,4 +683,124 @@ uТегни мене з питанням:
             header=header,
             answer=synthesized.answer,
             synthesized=synthesized
+        )
+
+    # === Analytics Formatting ===
+
+    @staticmethod
+    def format_top_speakers(stats: list[dict], limit: int = 10) -> str:
+        """
+        Format top speakers list.
+
+        Example output:
+        🏆 Найактивніші учасники:
+        1. 👤 Username1 — 1,234 повідомлень
+        2. 👤 Username2 — 987 повідомлень
+        """
+        if not stats:
+            return "Не знайдено повідомлень для аналізу."
+
+        lines = ["🏆 Найактивніші учасники:", ""]
+        medals = ["🥇", "🥈", "🥉"]
+
+        for i, stat in enumerate(stats[:limit]):
+            medal = medals[i] if i < 3 else f"{i + 1}."
+            lines.append(
+                f"{medal} 👤 {stat['display_name']} — {stat['message_count']:,} повідомлень"
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_mention_stats(term: str, stats: list[dict]) -> str:
+        """
+        Format mention count stats.
+
+        Example output:
+        📊 Хто згадував "Зеленський":
+        1. 👤 Username1 — 45 разів
+        2. 👤 Username2 — 32 рази
+        """
+        if not stats:
+            return f"Ніхто не згадував «{term}»."
+
+        lines = [f"📊 Хто згадував «{term}»:", ""]
+
+        for i, stat in enumerate(stats[:10]):
+            rank = i + 1
+            count = stat['mention_count']
+            suffix = MessageFormatter._pluralize_times(count)
+            lines.append(
+                f"{rank}. 👤 {stat['display_name']} — {count} {suffix}"
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_behavioral_stats(trait: str, stats: list[dict]) -> str:
+        """
+        Format behavioral analysis stats.
+
+        Example output:
+        🔍 Хто найбільш "злий":
+        1. 👤 Username1 — оцінка 8.5/10 (знайдено 23 повідомлення)
+        2. 👤 Username2 — оцінка 7.2/10 (знайдено 15 повідомлень)
+        """
+        if not stats:
+            return f"Не вдалося проаналізувати характеристику «{trait}»."
+
+        # Translate common traits
+        trait_names = {
+            'angry': 'злий/агресивний',
+            'strict': 'строгий',
+            'positive': 'позитивний',
+            'negative': 'негативний',
+            'psycho': 'божевільний',
+            'swears': 'лається',
+            'kind': 'добрий',
+            'aggressive': 'агресивний',
+            'toxic': 'токсичний',
+        }
+        trait_display = trait_names.get(trait, trait)
+
+        lines = [f"🔍 Хто найбільш «{trait_display}»:", ""]
+
+        for i, stat in enumerate(stats[:5]):
+            rank = i + 1
+            score = stat['score']
+            count = stat['example_count']
+            lines.append(
+                f"{rank}. 👤 {stat['display_name']} — оцінка {score:.1f}/10 "
+                f"(знайдено {count} повідомлень)"
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _pluralize_times(count: int) -> str:
+        """Pluralize 'раз/рази/разів' in Ukrainian."""
+        if count % 10 == 1 and count % 100 != 11:
+            return "раз"
+        elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
+            return "рази"
+        else:
+            return "разів"
+
+    @staticmethod
+    def format_quote_with_forward(result: dict) -> str:
+        """Format a search result quote, indicating if it's forwarded."""
+        meta = result.get("metadata", {})
+        username = meta.get("display_name", "Unknown")
+        date = meta.get("formatted_date", "Unknown date")
+        text = result.get("text", "")
+        is_forwarded = meta.get("is_forwarded", False)
+        forward_from = meta.get("forward_from")
+
+        return MessageFormatter.format_quote(
+            text=text,
+            username=username,
+            date=date,
+            similarity=result.get("similarity"),
+            is_forwarded=is_forwarded,
+            forward_from=forward_from
         )

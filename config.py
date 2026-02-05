@@ -35,3 +35,17 @@ EMBEDDING_WORKERS = 2           # Parallel embedding API calls (3 hits rate limi
 # Search
 DEFAULT_SEARCH_LIMIT = 5
 MAX_SEARCH_LIMIT = 20
+
+# Relevance Cache
+RELEVANCE_CACHE_TTL_HOURS = 24
+
+# Result Diversity (MMR)
+DIVERSITY_LAMBDA = 0.7
+MAX_RESULTS_PER_USER = 2
+
+# Analytics
+ANALYTICS_TOP_LIMIT = 10
+
+# Forwarded Messages
+PENALIZE_FORWARDS_FACTOR = 0.5
+EXCLUDE_FORWARDS_FOR_SPEAKER_QUERIES = True

@@ -24,6 +24,10 @@ class ParsedMessage:
     timestamp: datetime
     timestamp_unix: int
     reply_to_message_id: Optional[int]
+    # Forwarded message metadata
+    is_forwarded: bool = False
+    forward_from: Optional[str] = None
+    forward_date: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         """Convert to dict for database insertion."""
@@ -37,6 +41,9 @@ class ParsedMessage:
             "timestamp": self.timestamp,
             "timestamp_unix": self.timestamp_unix,
             "reply_to_message_id": self.reply_to_message_id,
+            "is_forwarded": self.is_forwarded,
+            "forward_from": self.forward_from,
+            "forward_date": self.forward_date,
         }
 
 
@@ -143,6 +150,33 @@ class TelegramExportParser:
         # Parse reply
         reply_to = msg.get("reply_to_message_id")
 
+        # Detect forwarded messages
+        is_forwarded = False
+        forward_from = None
+        forward_date = None
+
+        # Check for forwarded_from (Telegram export format)
+        forwarded_from = msg.get("forwarded_from")
+        if forwarded_from:
+            is_forwarded = True
+            forward_from = forwarded_from
+
+        # Alternative format: forward_from
+        if not is_forwarded:
+            fwd_from = msg.get("forward_from")
+            if fwd_from:
+                is_forwarded = True
+                forward_from = fwd_from
+
+        # Check for forward_date
+        fwd_date_str = msg.get("forward_date")
+        if fwd_date_str:
+            is_forwarded = True
+            try:
+                forward_date = datetime.fromisoformat(fwd_date_str)
+            except (ValueError, TypeError):
+                pass
+
         return ParsedMessage(
             message_id=msg.get("id"),
             user_id=user_id,
@@ -153,6 +187,9 @@ class TelegramExportParser:
             timestamp=timestamp,
             timestamp_unix=timestamp_unix,
             reply_to_message_id=reply_to,
+            is_forwarded=is_forwarded,
+            forward_from=forward_from,
+            forward_date=forward_date,
         )
 
     def stream_messages(self) -> Iterator[ParsedMessage]:

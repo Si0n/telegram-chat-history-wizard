@@ -4,7 +4,7 @@ from typing import Optional
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker, Session
 
-from .models import Base, Export, Message, UserAlias, EntityAlias
+from .models import Base, Export, Message, UserAlias, EntityAlias, RelevanceCache, SearchFeedback
 
 
 class Database:
@@ -619,3 +619,220 @@ class Database:
                 (EntityAlias.alias.ilike(query_lower)) |
                 (EntityAlias.canonical.ilike(query_lower))
             ).order_by(EntityAlias.canonical).all()
+
+    # === Relevance Cache Management ===
+
+    def get_cached_relevance(
+        self,
+        message_id: int,
+        query_hash: str,
+        ttl_hours: int = 24
+    ) -> Optional[int]:
+        """Get cached relevance score if not expired."""
+        with self.get_session() as session:
+            cutoff = datetime.utcnow() - __import__('datetime').timedelta(hours=ttl_hours)
+            cache = session.query(RelevanceCache).filter(
+                RelevanceCache.message_id == message_id,
+                RelevanceCache.query_hash == query_hash,
+                RelevanceCache.created_at >= cutoff
+            ).first()
+            return cache.score if cache else None
+
+    def get_cached_relevance_batch(
+        self,
+        message_ids: list[int],
+        query_hash: str,
+        ttl_hours: int = 24
+    ) -> dict[int, int]:
+        """Get cached relevance scores for multiple messages."""
+        if not message_ids:
+            return {}
+        with self.get_session() as session:
+            cutoff = datetime.utcnow() - __import__('datetime').timedelta(hours=ttl_hours)
+            caches = session.query(RelevanceCache).filter(
+                RelevanceCache.message_id.in_(message_ids),
+                RelevanceCache.query_hash == query_hash,
+                RelevanceCache.created_at >= cutoff
+            ).all()
+            return {c.message_id: c.score for c in caches}
+
+    def cache_relevance(self, message_id: int, query_hash: str, score: int):
+        """Cache a relevance score."""
+        with self.get_session() as session:
+            # Upsert - try to update first, then insert
+            existing = session.query(RelevanceCache).filter(
+                RelevanceCache.message_id == message_id,
+                RelevanceCache.query_hash == query_hash
+            ).first()
+
+            if existing:
+                existing.score = score
+                existing.created_at = datetime.utcnow()
+            else:
+                cache = RelevanceCache(
+                    message_id=message_id,
+                    query_hash=query_hash,
+                    score=score
+                )
+                session.add(cache)
+            session.commit()
+
+    def cache_relevance_batch(self, entries: list[tuple[int, str, int]]):
+        """Cache multiple relevance scores: [(message_id, query_hash, score), ...]."""
+        if not entries:
+            return
+        with self.get_session() as session:
+            for message_id, query_hash, score in entries:
+                existing = session.query(RelevanceCache).filter(
+                    RelevanceCache.message_id == message_id,
+                    RelevanceCache.query_hash == query_hash
+                ).first()
+
+                if existing:
+                    existing.score = score
+                    existing.created_at = datetime.utcnow()
+                else:
+                    cache = RelevanceCache(
+                        message_id=message_id,
+                        query_hash=query_hash,
+                        score=score
+                    )
+                    session.add(cache)
+            session.commit()
+
+    def cleanup_expired_cache(self, ttl_hours: int = 24) -> int:
+        """Delete expired cache entries. Returns count deleted."""
+        with self.get_session() as session:
+            cutoff = datetime.utcnow() - __import__('datetime').timedelta(hours=ttl_hours)
+            result = session.query(RelevanceCache).filter(
+                RelevanceCache.created_at < cutoff
+            ).delete()
+            session.commit()
+            return result
+
+    # === Search Feedback Management ===
+
+    def add_search_feedback(
+        self,
+        bot_message_id: int,
+        chat_id: int,
+        user_id: int,
+        rating: int,
+        query: str
+    ) -> SearchFeedback:
+        """Add user feedback for a search result."""
+        with self.get_session() as session:
+            feedback = SearchFeedback(
+                bot_message_id=bot_message_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                rating=rating,
+                query=query
+            )
+            session.add(feedback)
+            session.commit()
+            session.refresh(feedback)
+            return feedback
+
+    def get_feedback_stats(self, query_hash: str = None) -> dict:
+        """Get feedback statistics, optionally for a specific query."""
+        with self.get_session() as session:
+            query_obj = session.query(
+                func.count(SearchFeedback.id).label("total"),
+                func.sum(func.case((SearchFeedback.rating > 0, 1), else_=0)).label("positive"),
+                func.sum(func.case((SearchFeedback.rating < 0, 1), else_=0)).label("negative")
+            )
+            result = query_obj.first()
+            return {
+                "total": result.total or 0,
+                "positive": result.positive or 0,
+                "negative": result.negative or 0
+            }
+
+    # === Analytics Queries ===
+
+    def get_message_count_by_user(
+        self,
+        date_from: str = None,
+        date_to: str = None,
+        limit: int = 10
+    ) -> list[tuple]:
+        """Returns [(user_id, display_name, count), ...] sorted by count desc."""
+        with self.get_session() as session:
+            from sqlalchemy import desc
+
+            query_obj = session.query(
+                Message.user_id,
+                Message.username,
+                func.count(Message.id).label("count")
+            ).filter(
+                Message.user_id.isnot(None)
+            )
+
+            if date_from:
+                query_obj = query_obj.filter(Message.timestamp >= date_from)
+            if date_to:
+                query_obj = query_obj.filter(Message.timestamp <= date_to)
+
+            results = query_obj.group_by(
+                Message.user_id
+            ).order_by(
+                desc("count")
+            ).limit(limit).all()
+
+            return [
+                (r.user_id, r.username or f"User#{r.user_id}", r.count)
+                for r in results
+            ]
+
+    def get_term_mention_counts(self, term: str, limit: int = 10) -> list[tuple]:
+        """Returns [(user_id, display_name, count), ...] for term mentions."""
+        with self.get_session() as session:
+            from sqlalchemy import desc
+
+            # Case-insensitive search for term in message text
+            pattern = f"%{term}%"
+
+            results = session.query(
+                Message.user_id,
+                Message.username,
+                func.count(Message.id).label("count")
+            ).filter(
+                Message.user_id.isnot(None),
+                Message.text.ilike(pattern)
+            ).group_by(
+                Message.user_id
+            ).order_by(
+                desc("count")
+            ).limit(limit).all()
+
+            return [
+                (r.user_id, r.username or f"User#{r.user_id}", r.count)
+                for r in results
+            ]
+
+    def get_user_message_stats(self, user_id: int) -> dict:
+        """Get stats for a specific user: message count, date range, etc."""
+        with self.get_session() as session:
+            result = session.query(
+                func.count(Message.id).label("count"),
+                func.min(Message.timestamp).label("first_message"),
+                func.max(Message.timestamp).label("last_message")
+            ).filter(
+                Message.user_id == user_id
+            ).first()
+
+            return {
+                "message_count": result.count or 0,
+                "first_message": result.first_message,
+                "last_message": result.last_message
+            }
+
+    def get_messages_by_user(self, user_id: int, limit: int = 100) -> list[Message]:
+        """Get sample of user's messages for analysis."""
+        with self.get_session() as session:
+            return session.query(Message).filter(
+                Message.user_id == user_id,
+                Message.text.isnot(None),
+                Message.text != ""
+            ).order_by(Message.timestamp.desc()).limit(limit).all()

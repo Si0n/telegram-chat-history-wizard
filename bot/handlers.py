@@ -28,6 +28,8 @@ from search.entity_aliases import (
     ENTITY_ALIASES,
     HARDCODED_ALIASES
 )
+from search.intent_detection import detect_intent, SearchIntent, get_search_strategy
+from search.analytics import AnalyticsEngine, AnalyticsType
 from ingestion import ExportUploader
 from .formatters import MessageFormatter
 from .conversation_context import ConversationContext
@@ -64,7 +66,8 @@ class BotHandlers:
         self.uploader = uploader
         self.question_parser = question_parser
         self.answer_synthesizer = answer_synthesizer
-        self.search_agent = SearchAgent(vector_store)
+        self.search_agent = SearchAgent(vector_store, db=db)
+        self.analytics_engine = AnalyticsEngine(db, vector_store)
         self.formatter = MessageFormatter()
         self.conversation_context = ConversationContext()
         self.upload_wizard = UploadWizard()
@@ -453,6 +456,20 @@ class BotHandlers:
 
             logger.info(f"Parsed question: {parsed}")
 
+            # Detect intent and route accordingly
+            intent = detect_intent(parsed.original_question)
+            logger.info(f"Detected intent: {intent.value}")
+
+            # Handle analytics questions separately
+            if intent == SearchIntent.ANALYTICS:
+                await status_msg.delete()
+                handled = await self.handle_analytics_question(update, context, parsed)
+                if handled:
+                    return
+
+            # Get search strategy for this intent
+            strategy = get_search_strategy(intent)
+
             # Multi-step search with automatic query reformulation
             if parsed.mentioned_users:
                 # Search for specific users with agent
@@ -514,11 +531,25 @@ class BotHandlers:
                 update_interval=1.5
             )
 
-            # Format final response with quotes
+            # Fetch brief context for each supporting quote
+            quotes_with_context = []
+            for quote in synthesized.supporting_quotes[:3]:
+                msg_id = quote.get("metadata", {}).get("message_id")
+                if msg_id:
+                    context_msgs = self.db.get_thread_context(msg_id, before=2, after=2)
+                    quotes_with_context.append({
+                        "quote": quote,
+                        "context": context_msgs
+                    })
+                else:
+                    quotes_with_context.append({"quote": quote, "context": []})
+
+            # Format final response with quotes and context
             response = self.formatter.format_synthesized_answer_with_answer(
                 header=header,
                 answer=answer_text,
-                synthesized=synthesized
+                synthesized=synthesized,
+                quotes_with_context=quotes_with_context
             )
 
             # Cache search query for each shown message (for context highlighting)
@@ -660,10 +691,11 @@ class BotHandlers:
             for i, quote in enumerate(quotes[:3], 1):
                 meta = quote.get("metadata", {})
                 msg_id = meta.get("message_id")
+                author = meta.get("display_name", "")[:12]  # Truncate for button width
                 if msg_id:
                     context_buttons.append(
                         InlineKeyboardButton(
-                            text=f"📜 Контекст [{i}]",
+                            text=f"📜 {author}" if author else f"📜 Контекст [{i}]",
                             callback_data=f"ctx:{msg_id}"
                         )
                     )
@@ -1038,10 +1070,11 @@ class BotHandlers:
             for i, quote in enumerate(quotes[:3], 1):
                 meta = quote.get("metadata", {})
                 msg_id = meta.get("message_id")
+                author = meta.get("display_name", "")[:12]  # Truncate for button width
                 if msg_id:
                     context_buttons.append(
                         InlineKeyboardButton(
-                            text=f"📜 Контекст [{i}]",
+                            text=f"📜 {author}" if author else f"📜 Контекст [{i}]",
                             callback_data=f"ctx:{msg_id}"
                         )
                     )
@@ -1117,15 +1150,24 @@ class BotHandlers:
             for i, quote in enumerate(quotes[:3], 1):
                 meta = quote.get("metadata", {})
                 msg_id = meta.get("message_id")
+                author = meta.get("display_name", "")[:12]  # Truncate for button width
                 if msg_id:
                     context_buttons.append(
                         InlineKeyboardButton(
-                            text=f"📜 Контекст [{i}]",
+                            text=f"📜 {author}" if author else f"📜 Контекст [{i}]",
                             callback_data=f"ctx:{msg_id}"
                         )
                     )
             if context_buttons:
                 rows.append(context_buttons)
+
+        # Feedback buttons (thumbs up/down)
+        if context_key and state:
+            bot_msg_id = state.bot_message_id
+            rows.append([
+                InlineKeyboardButton("👍", callback_data=f"feedback:up:{bot_msg_id}:{context_key}"),
+                InlineKeyboardButton("👎", callback_data=f"feedback:down:{bot_msg_id}:{context_key}")
+            ])
 
         if not rows:
             return None
@@ -1300,6 +1342,95 @@ class BotHandlers:
         except Exception as e:
             logger.error(f"Thread callback error: {e}")
             await query.answer(f"❌ Помилка: {e}", show_alert=True)
+
+    async def handle_feedback_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle feedback button clicks (thumbs up/down)."""
+        query = update.callback_query
+
+        data = query.data
+        if not data.startswith("feedback:"):
+            return
+
+        try:
+            parts = data.split(":")
+            action = parts[1]  # "up" or "down"
+            bot_msg_id = int(parts[2])
+            context_key = parts[3] if len(parts) > 3 else None
+
+            rating = 1 if action == "up" else -1
+
+            # Get the original query from context
+            original_query = ""
+            if context_key:
+                state = self.conversation_context.get_by_context_key(context_key)
+                if state:
+                    original_query = state.original_question
+
+            # Store feedback
+            self.db.add_search_feedback(
+                bot_message_id=bot_msg_id,
+                chat_id=query.message.chat_id,
+                user_id=query.from_user.id,
+                rating=rating,
+                query=original_query
+            )
+
+            # Confirm to user
+            emoji = "👍" if rating > 0 else "👎"
+            await query.answer(f"{emoji} Дякую за відгук!")
+
+        except Exception as e:
+            logger.error(f"Feedback callback error: {e}")
+            await query.answer("❌ Помилка збереження відгуку", show_alert=True)
+
+    async def handle_analytics_question(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        parsed
+    ) -> bool:
+        """
+        Handle analytics questions (quantitative and behavioral).
+
+        Returns True if handled, False otherwise.
+        """
+        message = update.message
+
+        try:
+            # Show processing status
+            status_msg = await message.reply_text("📊 Аналізую статистику...")
+
+            # Answer analytics question
+            result = await self.analytics_engine.answer_analytics_question(
+                question=parsed.original_question,
+                search_term=parsed.search_query
+            )
+
+            # Build response
+            response = result.answer
+
+            # Add note about analytics type
+            if result.analytics_type == AnalyticsType.BEHAVIORAL:
+                response += "\n\n💡 Це оцінка на основі аналізу повідомлень"
+
+            if result.total_analyzed > 0:
+                response += f"\n📈 Проаналізовано: {result.total_analyzed:,} повідомлень"
+
+            # Edit status message with result
+            try:
+                if len(response) <= 4096:
+                    await status_msg.edit_text(response)
+                else:
+                    await status_msg.edit_text(response[:4000] + "\n\n⚠️ Відповідь скорочено...")
+            except Exception:
+                await message.reply_text(response)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Analytics handler error: {e}", exc_info=True)
+            await message.reply_text(f"❌ Помилка аналізу: {e}")
+            return False
 
     async def _get_related_context(self, target, message_id: int, max_context: int = 10) -> list:
         """Get context messages filtered by topic relevance."""
@@ -1754,5 +1885,6 @@ def setup_handlers(app: Application, db: Database, vector_store: VectorStore):
     app.add_handler(CallbackQueryHandler(handlers.handle_suggestion_callback, pattern=r"^suggest:"))
     app.add_handler(CallbackQueryHandler(handlers.handle_thread_callback, pattern=r"^thread:"))
     app.add_handler(CallbackQueryHandler(handlers.handle_upload_callback, pattern=r"^upload:"))
+    app.add_handler(CallbackQueryHandler(handlers.handle_feedback_callback, pattern=r"^feedback:"))
 
     return handlers

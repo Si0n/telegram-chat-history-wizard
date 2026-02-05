@@ -10,6 +10,42 @@ class Base(DeclarativeBase):
     pass
 
 
+class RelevanceCache(Base):
+    """Persistent cache for AI-judged relevance scores."""
+    __tablename__ = "relevance_cache"
+
+    id = Column(Integer, primary_key=True)
+    message_id = Column(BigInteger, nullable=False)
+    query_hash = Column(String(20), nullable=False)
+    score = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "query_hash", name="uq_relevance_msg_query"),
+        Index("idx_relevance_created_at", "created_at"),
+        Index("idx_relevance_message_id", "message_id"),
+    )
+
+
+class SearchFeedback(Base):
+    """User feedback on search results (thumbs up/down)."""
+    __tablename__ = "search_feedback"
+
+    id = Column(Integer, primary_key=True)
+    bot_message_id = Column(BigInteger, nullable=False)  # Bot's response message
+    chat_id = Column(BigInteger, nullable=False)
+    user_id = Column(BigInteger, nullable=False)
+    rating = Column(Integer, nullable=False)  # +1 or -1
+    query = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_feedback_chat_id", "chat_id"),
+        Index("idx_feedback_user_id", "user_id"),
+        Index("idx_feedback_created_at", "created_at"),
+    )
+
+
 class UserAlias(Base):
     """User nickname/alias mapping for natural language queries."""
     __tablename__ = "user_aliases"
@@ -85,6 +121,11 @@ class Message(Base):
 
     # Threading
     reply_to_message_id = Column(BigInteger)
+
+    # Forwarded message metadata
+    is_forwarded = Column(Boolean, default=False)
+    forward_from = Column(String(255), nullable=True)  # Channel/user name
+    forward_date = Column(DateTime, nullable=True)
 
     # Vector reference
     vector_id = Column(String(255))  # ChromaDB document ID
