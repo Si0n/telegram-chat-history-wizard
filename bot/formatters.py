@@ -618,7 +618,7 @@ uТегни мене з питанням:
                 target_msg_id = meta.get("message_id")
 
                 lines.append("")
-                lines.append(f"<quote author=\"{username}\">")
+                lines.append(f"💬 {username}:")
 
                 # Show context messages with the target highlighted
                 for msg in context_msgs:
@@ -633,8 +633,6 @@ uТегни мене з питанням:
 
                     lines.append(f"{marker} 👤 {msg_username} | 📅 {msg_date}")
                     lines.append(f"   > {msg_text}")
-
-                lines.append("</quote>")
 
         elif synthesized.supporting_quotes:
             # Fallback if no context provided
@@ -652,10 +650,9 @@ uТегни мене з питанням:
                     text = text[:800] + "..."
 
                 lines.append("")
-                lines.append(f"<quote author=\"{username}\">")
+                lines.append(f"💬 {username}:")
                 lines.append(f"👤 {username} | 📅 {date}")
                 lines.append(f"> {text}")
-                lines.append("</quote>")
 
         lines.append("")
         lines.append("━" * 30)

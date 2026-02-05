@@ -1710,7 +1710,7 @@ class BotHandlers:
             db_aliases = self.db.get_all_entity_aliases()
 
             # Format response
-            lines = ["📚 **Аліаси сутностей** (сленг → канонічна форма)\n"]
+            lines = ["📚 Аліаси сутностей (сленг → канонічна форма)\n"]
 
             # Group by category
             by_category: dict[str, list] = {}
@@ -1727,19 +1727,19 @@ class BotHandlers:
             lines.append(f"📊 Всього: {len(ENTITY_ALIASES)} ({hardcoded_count} вбудованих + {db_count} користувацьких)\n")
 
             if db_aliases:
-                lines.append("**Користувацькі аліаси:**")
+                lines.append("👤 Користувацькі аліаси:")
                 for cat, aliases in sorted(by_category.items()):
-                    lines.append(f"\n_{cat.capitalize()}:_")
+                    lines.append(f"\n{cat.capitalize()}:")
                     for a in aliases:
                         lines.append(f"  • {a.alias} → {a.canonical}")
             else:
-                lines.append("_Користувацьких аліасів ще немає._")
+                lines.append("Користувацьких аліасів ще немає.")
 
-            lines.append("\n**Команди:**")
+            lines.append("\n📋 Команди:")
             lines.append("/entity_alias <аліас> <канонічна форма> [категорія]")
             lines.append("/entity_alias_remove <аліас>")
 
-            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            await update.message.reply_text("\n".join(lines))
 
         except Exception as e:
             logger.error(f"Entity aliases error: {e}")
