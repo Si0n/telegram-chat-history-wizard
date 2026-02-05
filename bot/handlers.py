@@ -30,6 +30,7 @@ from search.entity_aliases import (
 )
 from search.intent_detection import detect_intent, SearchIntent, get_search_strategy
 from search.analytics import AnalyticsEngine, AnalyticsType
+from search.tools import ToolAgent
 from ingestion import ExportUploader
 from .formatters import MessageFormatter
 from .conversation_context import ConversationContext
@@ -68,6 +69,7 @@ class BotHandlers:
         self.answer_synthesizer = answer_synthesizer
         self.search_agent = SearchAgent(vector_store, db=db)
         self.analytics_engine = AnalyticsEngine(db, vector_store)
+        self.tool_agent = ToolAgent(db, vector_store)
         self.formatter = MessageFormatter()
         self.conversation_context = ConversationContext()
         self.upload_wizard = UploadWizard()
@@ -1390,7 +1392,8 @@ class BotHandlers:
         parsed
     ) -> bool:
         """
-        Handle analytics questions (quantitative and behavioral).
+        Handle analytics questions using the ToolAgent.
+        The AI decides which tools to call to answer the question.
 
         Returns True if handled, False otherwise.
         """
@@ -1398,23 +1401,10 @@ class BotHandlers:
 
         try:
             # Show processing status
-            status_msg = await message.reply_text("📊 Аналізую статистику...")
+            status_msg = await message.reply_text("📊 Аналізую питання...")
 
-            # Answer analytics question
-            result = await self.analytics_engine.answer_analytics_question(
-                question=parsed.original_question,
-                search_term=parsed.search_query
-            )
-
-            # Build response
-            response = result.answer
-
-            # Add note about analytics type
-            if result.analytics_type == AnalyticsType.BEHAVIORAL:
-                response += "\n\n💡 Це оцінка на основі аналізу повідомлень"
-
-            if result.total_analyzed > 0:
-                response += f"\n📈 Проаналізовано: {result.total_analyzed:,} повідомлень"
+            # Use ToolAgent to answer (AI decides which tools to call)
+            response = await self.tool_agent.answer(parsed.original_question)
 
             # Edit status message with result
             try:

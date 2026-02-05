@@ -195,3 +195,67 @@ class ChatService:
         async for chunk in response:
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
+
+    async def complete_with_tools_async(
+        self,
+        messages: list[dict],
+        tools: list[dict] = None,
+        max_tokens: int = 1000
+    ) -> dict:
+        """
+        Async chat completion with tool/function calling support.
+
+        Args:
+            messages: Conversation history
+            tools: List of tool definitions (OpenAI function format)
+            max_tokens: Max response tokens
+
+        Returns:
+            dict with 'content' (text response) and/or 'tool_calls' (list of tool calls)
+        """
+        import json
+
+        # Build request
+        request_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0.3
+        }
+
+        # Add tools if provided
+        if tools:
+            request_kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool["description"],
+                        "parameters": tool["parameters"]
+                    }
+                }
+                for tool in tools
+            ]
+            request_kwargs["tool_choice"] = "auto"
+
+        response = await self.async_client.chat.completions.create(**request_kwargs)
+
+        message = response.choices[0].message
+        result = {"content": message.content}
+
+        # Parse tool calls if present
+        if message.tool_calls:
+            result["tool_calls"] = []
+            for tc in message.tool_calls:
+                try:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+
+                result["tool_calls"].append({
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": args
+                })
+
+        return result
