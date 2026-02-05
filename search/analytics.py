@@ -13,6 +13,7 @@ from db import Database
 from search.vector_store import VectorStore
 from search.embeddings import ChatService
 from search.intent_detection import extract_analytics_type, extract_trait_from_question
+from search.entity_aliases import get_all_forms, get_canonical
 
 logger = logging.getLogger(__name__)
 
@@ -90,25 +91,34 @@ class AnalyticsEngine:
         limit: int = None
     ) -> list[dict]:
         """
-        Who mentioned X the most?
+        Who mentioned X the most? Automatically expands aliases.
 
         Args:
-            term: The term to search for
+            term: The term to search for (can be any alias form)
             limit: Max results to return
 
         Returns:
-            List of dicts with user_id, display_name, mention_count
+            List of dicts with user_id, display_name, mention_count, canonical_term
         """
         limit = limit or config.ANALYTICS_TOP_LIMIT
 
-        results = self.db.get_term_mention_counts(term, limit=limit)
+        # Expand term to all alias forms
+        all_forms = get_all_forms(term)
+        canonical = get_canonical(term)
+
+        logger.info(f"Analytics: searching term '{term}' expanded to: {all_forms}")
+
+        # Search for all forms at once
+        results = self.db.get_term_mention_counts_multi(all_forms, limit=limit)
 
         return [
             {
                 "user_id": user_id,
                 "display_name": display_name,
                 "mention_count": count,
-                "rank": i + 1
+                "rank": i + 1,
+                "canonical_term": canonical,
+                "searched_forms": all_forms
             }
             for i, (user_id, display_name, count) in enumerate(results)
         ]

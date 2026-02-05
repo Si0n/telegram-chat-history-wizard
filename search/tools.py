@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from db import Database
 from search.vector_store import VectorStore
 from search.embeddings import ChatService
+from search.entity_aliases import get_all_forms, get_canonical
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +19,13 @@ logger = logging.getLogger(__name__)
 TOOLS_SCHEMA = [
     {
         "name": "count_term_mentions",
-        "description": "Count how many times each user mentioned a specific term/word in their messages. Use for questions like 'who mentions X most often'.",
+        "description": "Count how many times each user mentioned a specific term/word. Aliases are auto-expanded (e.g., 'зелупа' searches for all forms: зе, зеля, Зеленський, etc.). Use for questions like 'who mentions X most often'.",
         "parameters": {
             "type": "object",
             "properties": {
                 "term": {
                     "type": "string",
-                    "description": "The term/word to search for (e.g., 'Зеленський', 'біткоін')"
+                    "description": "The term/word to search for. Use any form - aliases expand automatically (e.g., 'зелупа', 'порох', 'біток')"
                 },
                 "limit": {
                     "type": "integer",
@@ -71,14 +72,14 @@ TOOLS_SCHEMA = [
     },
     {
         "name": "compare_term_mentions",
-        "description": "Compare how often different terms are mentioned by users. Use for comparison questions like 'who mentions X more vs Y'.",
+        "description": "Compare how often different terms are mentioned. Aliases are auto-expanded for each term. Use for comparison questions like 'who mentions зелупу vs пороха'.",
         "parameters": {
             "type": "object",
             "properties": {
                 "terms": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of terms to compare (e.g., ['Зеленський', 'Порошенко'])"
+                    "description": "List of terms to compare. Use any form - aliases expand automatically (e.g., ['зелупа', 'порох'] or ['біток', 'ефір'])"
                 },
                 "limit": {
                     "type": "integer",
@@ -141,14 +142,22 @@ class ToolExecutor:
             return ToolResult(tool_name, False, None, str(e))
 
     def _count_term_mentions(self, params: dict) -> ToolResult:
-        """Count term mentions by user."""
+        """Count term mentions by user, expanding entity aliases."""
         term = params.get("term", "")
         limit = params.get("limit", 10)
 
-        results = self.db.get_term_mention_counts(term, limit=limit)
+        # Expand term to all known alias forms
+        all_forms = get_all_forms(term)
+        canonical = get_canonical(term)
+
+        logger.info(f"Searching for term '{term}' expanded to forms: {all_forms}")
+
+        # Search for all forms at once
+        results = self.db.get_term_mention_counts_multi(all_forms, limit=limit)
 
         data = {
-            "term": term,
+            "term": canonical,  # Use canonical form for display
+            "searched_forms": all_forms,
             "results": [
                 {"username": username, "count": count, "rank": i + 1}
                 for i, (user_id, username, count) in enumerate(results)
@@ -208,39 +217,53 @@ class ToolExecutor:
         return ToolResult("search_messages", True, data)
 
     def _compare_term_mentions(self, params: dict) -> ToolResult:
-        """Compare mentions of multiple terms."""
+        """Compare mentions of multiple terms, expanding entity aliases."""
         terms = params.get("terms", [])
         limit = params.get("limit", 10)
 
         comparison = {}
         all_users = set()
+        term_forms_map = {}  # Track which forms were searched for each term
 
         for term in terms:
-            results = self.db.get_term_mention_counts(term, limit=limit)
-            comparison[term] = {
+            # Expand each term to all known alias forms
+            all_forms = get_all_forms(term)
+            canonical = get_canonical(term)
+            term_forms_map[canonical] = all_forms
+
+            logger.info(f"Comparing term '{term}' expanded to forms: {all_forms}")
+
+            # Search for all forms at once
+            results = self.db.get_term_mention_counts_multi(all_forms, limit=limit * 2)
+            comparison[canonical] = {
                 username: count
                 for user_id, username, count in results
             }
-            all_users.update(comparison[term].keys())
+            all_users.update(comparison[canonical].keys())
+
+        # Use canonical forms for the comparison
+        canonical_terms = list(comparison.keys())
 
         # Build comparison table
         user_comparison = []
         for username in all_users:
             row = {"username": username}
-            for term in terms:
+            for term in canonical_terms:
                 row[term] = comparison[term].get(username, 0)
-            row["total"] = sum(row.get(term, 0) for term in terms)
+            row["total"] = sum(row.get(term, 0) for term in canonical_terms)
             user_comparison.append(row)
 
         # Sort by total mentions
         user_comparison.sort(key=lambda x: x["total"], reverse=True)
 
         data = {
-            "terms": terms,
+            "terms": canonical_terms,  # Use canonical forms
+            "original_terms": terms,
+            "searched_forms": term_forms_map,
             "by_user": user_comparison[:limit],
             "totals": {
                 term: sum(comparison[term].values())
-                for term in terms
+                for term in canonical_terms
             }
         }
 
@@ -369,6 +392,13 @@ class ToolAgent:
 - compare_term_mentions: порівняти згадування різних термінів
 - get_user_stats: статистика конкретного користувача
 
+ВАЖЛИВО про аліаси:
+Система автоматично розширює сленг/прізвиська до всіх форм:
+- "зелупа", "зе", "зеля" → шукає всі форми включно з "Зеленський"
+- "порох", "петя", "барига" → шукає всі форми включно з "Порошенко"
+- "біток", "btc" → шукає всі форми включно з "біткоін"
+Використовуй терміни як їх написав користувач - система сама знайде всі варіанти.
+
 Правила:
 1. Для порівняльних питань ("хто більше X чи Y") використовуй compare_term_mentions
 2. Для питань "хто частіше згадує X" використовуй count_term_mentions
@@ -379,9 +409,10 @@ class ToolAgent:
    - Прості списки з цифрами (1. 2. 3.)
    - Тире для пунктів
 6. Форматуй відповідь зрозуміло з цифрами та іменами
+7. В результатах вказуй канонічну форму (Зеленський, Порошенко) для ясності
 
 Приклад формату:
-📊 Згадки "Зеленський":
+📊 Згадки "Зеленський" (зе, зеля, зелупа...):
 1. 👤 Username — 100 разів
 2. 👤 Username2 — 50 разів
 

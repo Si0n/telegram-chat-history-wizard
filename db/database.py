@@ -811,6 +811,38 @@ class Database:
                 for r in results
             ]
 
+    def get_term_mention_counts_multi(self, terms: list[str], limit: int = 10) -> list[tuple]:
+        """
+        Returns [(user_id, display_name, count), ...] for mentions of ANY of the terms.
+        Used for searching all alias forms of a term (e.g., зе, зеля, зеленський).
+        """
+        if not terms:
+            return []
+
+        with self.get_session() as session:
+            from sqlalchemy import desc, or_
+
+            # Build OR conditions for all terms
+            conditions = [Message.text.ilike(f"%{term}%") for term in terms]
+
+            results = session.query(
+                Message.user_id,
+                Message.username,
+                func.count(Message.id).label("count")
+            ).filter(
+                Message.user_id.isnot(None),
+                or_(*conditions)
+            ).group_by(
+                Message.user_id
+            ).order_by(
+                desc("count")
+            ).limit(limit).all()
+
+            return [
+                (r.user_id, r.username or f"User#{r.user_id}", r.count)
+                for r in results
+            ]
+
     def get_user_message_stats(self, user_id: int) -> dict:
         """Get stats for a specific user: message count, date range, etc."""
         with self.get_session() as session:
