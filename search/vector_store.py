@@ -154,6 +154,9 @@ class VectorStore:
         if not date_from and not date_to:
             return matches
 
+        import logging
+        logger = logging.getLogger(__name__)
+
         # Parse date bounds
         from_ts = None
         to_ts = None
@@ -163,7 +166,7 @@ class VectorStore:
                 from_dt = datetime.strptime(date_from, "%Y-%m-%d")
                 from_ts = int(from_dt.timestamp())
             except ValueError:
-                pass
+                logger.warning(f"Failed to parse date_from: {date_from}")
 
         if date_to:
             try:
@@ -171,13 +174,28 @@ class VectorStore:
                 # Include the entire end date
                 to_ts = int(to_dt.timestamp()) + 86400  # +1 day
             except ValueError:
-                pass
+                logger.warning(f"Failed to parse date_to: {date_to}")
+
+        logger.info(f"Date filtering: from_ts={from_ts}, to_ts={to_ts}, matches={len(matches)}")
 
         filtered = []
+        excluded_count = 0
+        excluded_reasons = {"no_ts": 0, "before_from": 0, "after_to": 0}
+        debug_samples = []  # Log first few for debugging
+
         for match in matches:
             meta = match.get("metadata", {})
             # Try timestamp_unix first, then parse formatted_date
             msg_ts = meta.get("timestamp_unix")
+            ts_source = "timestamp_unix" if msg_ts is not None else None
+
+            # Ensure msg_ts is an integer (ChromaDB might return string)
+            if msg_ts is not None:
+                try:
+                    msg_ts = int(msg_ts)
+                except (ValueError, TypeError):
+                    msg_ts = None
+                    ts_source = None
 
             if msg_ts is None:
                 # Try to parse formatted_date (DD.MM.YYYY HH:MM)
@@ -186,22 +204,41 @@ class VectorStore:
                     try:
                         dt = datetime.strptime(formatted.split()[0], "%d.%m.%Y")
                         msg_ts = int(dt.timestamp())
+                        ts_source = "formatted_date"
                     except ValueError:
                         pass
 
+            # Log first 3 matches for debugging
+            if len(debug_samples) < 3:
+                debug_samples.append({
+                    "formatted_date": meta.get("formatted_date"),
+                    "timestamp_unix": meta.get("timestamp_unix"),
+                    "msg_ts": msg_ts,
+                    "ts_source": ts_source,
+                    "to_ts": to_ts,
+                    "should_exclude": msg_ts is None or (to_ts and msg_ts > to_ts)
+                })
+
             if msg_ts is None:
-                # Can't determine date, include by default
-                filtered.append(match)
+                # Can't determine date, EXCLUDE by default for date-filtered queries
+                excluded_count += 1
+                excluded_reasons["no_ts"] += 1
                 continue
 
             # Apply filter
             if from_ts and msg_ts < from_ts:
+                excluded_count += 1
+                excluded_reasons["before_from"] += 1
                 continue
             if to_ts and msg_ts > to_ts:
+                excluded_count += 1
+                excluded_reasons["after_to"] += 1
                 continue
 
             filtered.append(match)
 
+        logger.info(f"Date filter debug samples: {debug_samples}")
+        logger.info(f"Date filter: {len(matches)} -> {len(filtered)} (excluded {excluded_count}: {excluded_reasons})")
         return filtered
 
     def search_by_user(

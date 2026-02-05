@@ -241,12 +241,21 @@ class Indexer:
                 for i, chunk in enumerate(chunks):
                     texts.append(chunk)
                     db_ids.append(msg.id)
+
+                    # Calculate timestamp_unix for date filtering
+                    ts_unix = None
+                    if msg.timestamp_unix:
+                        ts_unix = msg.timestamp_unix
+                    elif msg.timestamp:
+                        ts_unix = int(msg.timestamp.timestamp())
+
                     meta = {
                         "message_id": msg.message_id,
                         "user_id": msg.user_id or 0,
                         "username": msg.username or "",
                         "display_name": msg.display_name,
                         "timestamp": msg.timestamp.isoformat() if msg.timestamp else "",
+                        "timestamp_unix": ts_unix,  # Include for date filtering
                         "formatted_date": msg.formatted_date
                     }
                     if len(chunks) > 1:

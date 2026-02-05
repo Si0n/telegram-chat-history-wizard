@@ -307,7 +307,7 @@ class SearchAgent:
             session.iterations += 1
             session.queries_tried.append(current_query)
 
-            logger.info(f"Search iteration {session.iterations}: '{current_query}'")
+            logger.info(f"Search iteration {session.iterations}: '{current_query}' (date_from={date_from}, date_to={date_to})")
 
             # On first iteration, also search with HyDE queries
             queries_to_search = [current_query]
