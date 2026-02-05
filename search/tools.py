@@ -328,11 +328,18 @@ class ToolAgent:
                     messages.append({
                         "role": "assistant",
                         "content": None,
-                        "tool_calls": [tool_call]
+                        "tool_calls": [{
+                            "id": tool_call.get("id", f"call_{tool_name}"),
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": json.dumps(params, ensure_ascii=False)
+                            }
+                        }]
                     })
                     messages.append({
                         "role": "tool",
-                        "tool_call_id": tool_call.get("id", tool_name),
+                        "tool_call_id": tool_call.get("id", f"call_{tool_name}"),
                         "content": json.dumps(result.data if result.success else {"error": result.error}, ensure_ascii=False)
                     })
             else:
