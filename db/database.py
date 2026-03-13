@@ -96,7 +96,7 @@ class Database:
             raise ValueError("Only SELECT queries are allowed")
 
         # Wrap cleaned SQL to enforce result limit
-        wrapped = f"SELECT * FROM ({cleaned}) LIMIT 50"
+        wrapped = f"SELECT * FROM ({cleaned}) LIMIT {config.AGENT_MAX_RESULTS}"
 
         def _run():
             with self.engine.connect() as conn:
