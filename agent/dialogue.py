@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from db.database import Database
 
@@ -12,7 +12,7 @@ class DialogueWindow:
     @staticmethod
     def _ts_from_unix(unix_ts: int) -> datetime:
         """Convert unix timestamp to UTC datetime for DB queries."""
-        return datetime.utcfromtimestamp(unix_ts)
+        return datetime.fromtimestamp(unix_ts, tz=timezone.utc).replace(tzinfo=None)
 
     def open(self, message_id: int) -> tuple[list[dict], int, int]:
         """

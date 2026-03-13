@@ -83,8 +83,8 @@ class BotHandlers:
         # Run agent in thread (blocking I/O)
         try:
             result = await asyncio.to_thread(self.agent.process_query, query)
-        except Exception as e:
-            logger.error(f"Agent error: {e}")
+        except Exception:
+            logger.exception("Agent error during query processing")
             await reply.edit_text("Search service is temporarily unavailable. Try again later.")
             return
 

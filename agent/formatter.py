@@ -21,7 +21,7 @@ class Formatter:
 
     def highlight(self, text: str, terms: list[str]) -> str:
         """Bold highlight terms in already-escaped HTML text (case-insensitive)."""
-        for term in terms:
+        for term in sorted(terms, key=len, reverse=True):
             escaped_term = self.escape_html(term)
             pattern = re.compile(re.escape(escaped_term), re.IGNORECASE)
             text = pattern.sub(lambda m: f"<b>{m.group()}</b>", text)
@@ -52,7 +52,7 @@ class Formatter:
                 result.append(text[i])
                 visible += 1
                 i += 1
-            if visible >= max_chars:
+            if visible >= max_chars and i < len(text):
                 result.append("...")
                 break
         return "".join(result)
