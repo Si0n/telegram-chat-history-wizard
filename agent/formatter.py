@@ -31,14 +31,21 @@ class Formatter:
         """Truncate HTML-escaped text at max_chars of visible content, preserving tags."""
         visible = 0
         result = []
+        open_tags = []
         i = 0
         while i < len(text):
             if text[i] == "<":
-                # Skip HTML tags (don't count towards visible chars)
+                # Track HTML tags (don't count towards visible chars)
                 end = text.find(">", i)
                 if end == -1:
                     break
-                result.append(text[i : end + 1])
+                tag = text[i : end + 1]
+                result.append(tag)
+                if tag.startswith("</"):
+                    if open_tags:
+                        open_tags.pop()
+                elif not tag.endswith("/>"):
+                    open_tags.append(tag)
                 i = end + 1
             elif text[i] == "&":
                 # HTML entity counts as 1 visible char
@@ -55,6 +62,10 @@ class Formatter:
             if visible >= max_chars and i < len(text):
                 result.append("...")
                 break
+        # Close any open tags
+        for tag in reversed(open_tags):
+            tag_name = tag[1:].split()[0].rstrip(">")
+            result.append(f"</{tag_name}>")
         return "".join(result)
 
     def _format_timestamp(self, ts_str: str) -> str:
