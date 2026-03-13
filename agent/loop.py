@@ -164,14 +164,18 @@ class AgentLoop:
         sort_order = args.get("sort_order", "asc")
         explanation = args.get("explanation", "")
 
-        # Fetch messages that were in collected results
-        results = [collected[rid] for rid in result_ids if rid in collected]
+        if result_ids:
+            # Use specified IDs
+            results = [collected[rid] for rid in result_ids if rid in collected]
 
-        # If some IDs weren't in collected (e.g., from SQL), fetch from DB
-        missing_ids = [rid for rid in result_ids if rid not in collected]
-        if missing_ids:
-            db_msgs = self.db.get_messages_by_db_ids(missing_ids)
-            results.extend(db_msgs)  # Already plain dicts from _msg_to_dict
+            # If some IDs weren't in collected (e.g., from SQL), fetch from DB
+            missing_ids = [rid for rid in result_ids if rid not in collected]
+            if missing_ids:
+                db_msgs = self.db.get_messages_by_db_ids(missing_ids)
+                results.extend(db_msgs)
+        else:
+            # No IDs specified — use all collected results
+            results = list(collected.values())
 
         # Sort by timestamp
         reverse = sort_order == "desc"

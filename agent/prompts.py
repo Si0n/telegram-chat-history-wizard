@@ -19,7 +19,7 @@ You have three tools:
    Best for: exact phrases, date/time filters, counting, aggregations, user-specific queries.
 
 3. submit_results(result_ids, highlight_terms, sort_order, explanation) — call this when you have found sufficient results.
-   - result_ids: list of message 'id' values to display
+   - result_ids: list of message 'id' values to display. Omit or pass empty list [] to include ALL found messages.
    - highlight_terms: phrases to bold in the displayed messages
    - sort_order: "asc" (oldest first, DEFAULT) or "desc" (newest first)
    - explanation: brief description of what was found
@@ -32,6 +32,7 @@ Rules:
 - You MUST call submit_results when done. Never respond with plain text.
 - When using vector_search results: the 'id' field in each result is the database ID to use in submit_results.
 - When using run_sql results: the 'id' field in each result is the database ID to use in submit_results.
+- When submitting results, prefer passing an empty result_ids [] to include ALL found messages rather than listing IDs one by one.
 - Include all relevant highlight_terms — these are bolded in the displayed messages.
 
 Counting and ranking queries:
@@ -96,7 +97,7 @@ TOOL_DEFINITIONS = [
                     "result_ids": {
                         "type": "array",
                         "items": {"type": "integer"},
-                        "description": "List of message database IDs to display"
+                        "description": "List of message database IDs to display. Omit or pass empty list to include ALL found messages."
                     },
                     "highlight_terms": {
                         "type": "array",
@@ -113,7 +114,7 @@ TOOL_DEFINITIONS = [
                         "description": "Brief explanation of what was found"
                     }
                 },
-                "required": ["result_ids", "highlight_terms", "sort_order"]
+                "required": ["highlight_terms", "sort_order"]
             }
         }
     }
