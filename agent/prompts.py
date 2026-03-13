@@ -32,7 +32,17 @@ Rules:
 - You MUST call submit_results when done. Never respond with plain text.
 - When using vector_search results: the 'id' field in each result is the database ID to use in submit_results.
 - When using run_sql results: the 'id' field in each result is the database ID to use in submit_results.
-- Include all relevant highlight_terms — these are bolded in the displayed messages."""
+- Include all relevant highlight_terms — these are bolded in the displayed messages.
+
+Counting and ranking queries:
+- For "how many times" / "скільки разів" / "сколько раз": first run a COUNT aggregation SQL,
+  then run a regular SELECT to get the matching messages. Put the count in the explanation
+  (e.g. "Слово 'жопа' згадали 47 разів").
+- For "who said X the most" / "хто найбільше" / "кто больше всех": run a GROUP BY query
+  to get the ranking (user + count), then fetch the actual messages. Put the ranking in
+  the explanation (e.g. "Топ: 1. Леха — 23 рази, 2. Саша — 15, 3. Дима — 8").
+- Always submit the actual messages too (result_ids) so the user can browse them.
+- The explanation is shown to the user as a header above the paginated messages."""
 
 
 TOOL_DEFINITIONS = [
@@ -51,7 +61,7 @@ TOOL_DEFINITIONS = [
                     "n_results": {
                         "type": "integer",
                         "description": "Number of results to return (max 50)",
-                        "default": 20
+                        "default": 50
                     }
                 },
                 "required": ["query"]

@@ -15,6 +15,7 @@ class SearchState:
     current_page: int = 0
     sort_order: str = "asc"
     highlight_terms: list[str] = field(default_factory=list)
+    explanation: str = ""
     last_accessed: float = field(default_factory=time.time)
 
 

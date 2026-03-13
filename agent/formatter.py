@@ -90,6 +90,7 @@ class Formatter:
         page: int,
         highlight_terms: list[str],
         sort_order: str,
+        explanation: str = "",
     ) -> tuple[str, InlineKeyboardMarkup | None]:
         """Format a page of search results with inline keyboard."""
         if not page_results:
@@ -100,7 +101,10 @@ class Formatter:
         end = start + len(page_results) - 1
         sort_label = "oldest first" if sort_order == "asc" else "newest first"
 
-        lines = [f"Found {total} messages. Showing {start}-{end} ({sort_label}):\n"]
+        lines = []
+        if explanation:
+            lines.append(f"{self.escape_html(explanation)}\n")
+        lines.append(f"Found {total} messages. Showing {start}-{end} ({sort_label}):\n")
         budget = self._char_budget_per_message(len(page_results))
 
         for i, msg in enumerate(page_results):

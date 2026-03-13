@@ -106,7 +106,7 @@ class AgentLoop:
             return {"error": "Vector search unavailable. Use run_sql instead."}
 
         query = args.get("query", "")
-        n_results = min(args.get("n_results", 20), config.AGENT_MAX_RESULTS)
+        n_results = min(args.get("n_results", config.AGENT_MAX_RESULTS), config.AGENT_MAX_RESULTS)
 
         try:
             # Embed query

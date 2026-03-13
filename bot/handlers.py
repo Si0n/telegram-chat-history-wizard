@@ -104,6 +104,7 @@ class BotHandlers:
             original_query=query,
             sort_order=result.get("sort_order", "asc"),
             highlight_terms=result.get("highlight_terms", []),
+            explanation=result.get("explanation", ""),
         )
         self.state.set(message.chat_id, reply.message_id, search_state)
 
@@ -115,6 +116,7 @@ class BotHandlers:
             page=0,
             highlight_terms=search_state.highlight_terms,
             sort_order=search_state.sort_order,
+            explanation=search_state.explanation,
         )
 
         await reply.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
@@ -158,6 +160,7 @@ class BotHandlers:
             page=page,
             highlight_terms=state.highlight_terms,
             sort_order=state.sort_order,
+            explanation=state.explanation,
         )
         await query.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
 
@@ -308,6 +311,7 @@ class BotHandlers:
             page=page,
             highlight_terms=search_state.highlight_terms,
             sort_order=search_state.sort_order,
+            explanation=search_state.explanation,
         )
         await query.message.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
 
