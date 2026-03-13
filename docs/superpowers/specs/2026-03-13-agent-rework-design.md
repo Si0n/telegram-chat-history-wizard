@@ -47,9 +47,9 @@ The agent decides which tool to use based on the question. It can chain tools (e
 
 ### Safety Constraints
 
-- Only `SELECT` statements allowed — reject INSERT/UPDATE/DELETE/DROP
-- Query timeout: 5 seconds max
-- Result limit: `LIMIT 50` injected if missing
+- **Whitelist approach:** Only `SELECT` statements allowed. Parse the query and reject if the first keyword is not `SELECT`. Do not use a denylist.
+- Query timeout: 5 seconds max via SQLAlchemy `execution_options`
+- Result limit: wrap user query as `SELECT * FROM ({user_query}) LIMIT 50` to enforce cap
 - Max 3 agent iterations per user query
 
 ## System Prompt
@@ -65,10 +65,12 @@ You are a chat history search agent. You have two tools:
 
 2. run_sql(sql) — execute SELECT query against SQLite messages table:
    Columns: id, message_id, chat_id, user_id, username, first_name,
-            last_name, text, timestamp, reply_to_message_id
+            last_name, text, timestamp, timestamp_unix,
+            reply_to_message_id, is_forwarded, forward_from, forward_date
    - ALWAYS sort by timestamp, NEVER by id (two chats were merged)
-   - Use LIKE for text matching
+   - Use LIKE for text matching (case-insensitive by default in SQLite)
    - Best for: exact phrases, date filters, counting, user filters
+   - All queries search across all chats (no chat_id filter needed)
 
 Rules:
 - Default sort: oldest first (ASC) unless user asks for recent/latest
@@ -91,6 +93,71 @@ The LLM returns structured output containing:
 ```
 
 After tool execution, results are fed back. The LLM either returns final results or issues another tool call for refinement.
+
+### Tool I/O Formats
+
+**`vector_search` input:**
+```json
+{"query": "разбирается в интеллекте", "n_results": 20}
+```
+
+**`vector_search` output** (list of dicts):
+```json
+[
+  {
+    "id": 12345,
+    "user_id": 645706876,
+    "username": "leha",
+    "first_name": "Леха",
+    "text": "Ну я вообще-то разберусь в интелекте...",
+    "timestamp": "2021-03-15T14:32:00",
+    "similarity": 0.87
+  }
+]
+```
+
+**`run_sql` input:**
+```json
+{"sql": "SELECT * FROM messages WHERE text LIKE '%интеллект%' ORDER BY timestamp ASC"}
+```
+
+**`run_sql` output** (list of dicts, same shape as vector_search minus `similarity`):
+```json
+[
+  {
+    "id": 12345,
+    "user_id": 645706876,
+    "username": "leha",
+    "first_name": "Леха",
+    "text": "Ну я вообще-то разберусь в интелекте...",
+    "timestamp": "2021-03-15T14:32:00"
+  }
+]
+```
+
+**Final LLM response** (when satisfied with results):
+```json
+{
+  "done": true,
+  "result_ids": [12345, 12400, 12455],
+  "highlight_terms": ["разбирается в интеллекте", "разберусь в интелекте"],
+  "sort_order": "asc",
+  "explanation": "Found original phrase and subsequent references"
+}
+```
+
+### Callback Data Format
+
+Telegram inline button callback data (max 64 bytes):
+
+| Button | Callback Data | Example |
+|--------|---------------|---------|
+| Prev page | `p:{page}` | `p:0` |
+| Next page | `p:{page}` | `p:2` |
+| Dialogue N | `d:{msg_id}` | `d:12345` |
+| Dialogue Back | `db:{timestamp}` | `db:1615815120` |
+| Dialogue Forward | `df:{timestamp}` | `df:1615815360` |
+| Back to results | `br` | `br` |
 
 ## Result Display
 
@@ -190,12 +257,17 @@ In-memory dictionary keyed by `(chat_id, bot_message_id)`.
 }
 ```
 
-**TTL:** 30 minutes. **Max concurrent:** 100 conversations.
+**TTL:** 30 minutes. **Max concurrent:** 100 conversations. When the limit is reached, the oldest entry (by last access time) is evicted (LRU).
 
 ## Interaction Modes
 
 - **Group chat:** Bot triggered by `@bot_name` mention. Mention is stripped before processing.
 - **Direct message:** No mention needed. All text treated as a query.
+
+### Commands
+
+- `/start` — Welcome message explaining what the bot does and how to use it
+- `/help` — Usage instructions with example queries
 
 ## Project Structure
 
@@ -253,6 +325,12 @@ messages                         # Core data — id, message_id, chat_id, user_i
                                  # is_embedded, is_forwarded, forward_from, forward_date
 ```
 
+### DB Migration
+
+The `messages.export_id` column has a foreign key to the `exports` table. Since `exports` is being removed:
+- Drop the `export_id` FK constraint and column from the `messages` model
+- The `DISPLAY_NAME_OVERRIDES` config is removed — strip all references from `db/models.py` and `db/database.py` (use `first_name` directly for display)
+
 ### ChromaDB
 Kept as-is. Used only by the `vector_search` tool. No changes to the existing embeddings or collection.
 
@@ -306,7 +384,47 @@ MAX_MESSAGE_LENGTH, CHUNK_OVERLAP, EMBEDDING_WORKERS,
 DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, RELEVANCE_CACHE_TTL_HOURS,
 DIVERSITY_LAMBDA, MAX_RESULTS_PER_USER, PENALIZE_FORWARDS_FACTOR,
 EXCLUDE_FORWARDS_FOR_SPEAKER_QUERIES, DISPLAY_NAME_OVERRIDES,
-ALLOWED_CHAT_IDS
+ANALYTICS_TOP_LIMIT, CHAT_EXPORTS_DIR
+```
+
+## Error Handling
+
+| Scenario | User-facing message |
+|----------|---------------------|
+| OpenAI API down/timeout | "Search service is temporarily unavailable. Try again later." |
+| SQL query timeout (>5s) | "Query took too long. Try a more specific search." |
+| 0 results after 3 iterations | "Nothing found. Try rephrasing your question." |
+| ChromaDB unavailable | Agent falls back to SQL-only search |
+| Non-search message in DM | Treated as a search query (everything is a query in DM) |
+| Callback for expired state | "This search has expired. Please search again." |
+
+## Dialogue Window Fetch Logic
+
+All dialogue queries filter by `chat_id` of the selected message, so scrolling stays within the same chat and doesn't pull in messages from the other merged chat.
+
+**Initial view** (clicking 💬 N):
+```
+anchor_ts = selected_message.timestamp
+cid = selected_message.chat_id
+before = SELECT * FROM messages WHERE chat_id = cid AND timestamp < anchor_ts ORDER BY timestamp DESC LIMIT 2
+after  = SELECT * FROM messages WHERE chat_id = cid AND timestamp > anchor_ts ORDER BY timestamp ASC LIMIT 2
+display = reversed(before) + [selected] + after   # 5 messages, chronological
+```
+
+**Back button:**
+```
+first_ts = current_window[0].timestamp
+cid = current_window[0].chat_id
+earlier = SELECT * FROM messages WHERE chat_id = cid AND timestamp < first_ts ORDER BY timestamp DESC LIMIT 3
+display = reversed(earlier) + [current_window[0]]  # 4 messages, chronological
+```
+
+**Forward button:**
+```
+last_ts = current_window[-1].timestamp
+cid = current_window[-1].chat_id
+later = SELECT * FROM messages WHERE chat_id = cid AND timestamp > last_ts ORDER BY timestamp ASC LIMIT 3
+display = [current_window[-1]] + later              # 4 messages, chronological
 ```
 
 ## Data Flow Summary
