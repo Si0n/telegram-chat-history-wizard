@@ -1,4 +1,54 @@
-SYSTEM_PROMPT = """You are a chat history search agent. Your job is to find messages in a chat history database.
+ENTITY_ALIASES = {
+    # Politicians
+    "Зеленський": ["зе", "зєля", "зелупа", "зеля", "зелібоба", "слуга", "квартал", "клоун", "зеленый"],
+    "Порошенко": ["порох", "петя", "петро", "барига", "рошен", "шоколадний", "попередник"],
+    "Тимошенко": ["юля", "юлька", "коса", "газова принцеса", "леді ю"],
+    "Янукович": ["янек", "овощ", "легітимний", "межигір'я"],
+    "Кличко": ["віталік", "боксер"],
+    "Путін": ["путін", "путин", "пу", "пуйло", "хуйло", "бункерний", "карлик", "плішивий", "вова", "вовчик"],
+    "Лукашенко": ["лукаш", "бацька", "батька", "картопля", "таракан", "усатий"],
+    # Crypto
+    "біткоін": ["біток", "бітон", "btc", "bitcoin", "біткоїн"],
+    "ефіріум": ["ефір", "eth", "ethereum", "етер"],
+    "криптовалюта": ["крипта", "crypto"],
+    "solana": ["солана", "sol"],
+    "dogecoin": ["додж", "doge", "шиба"],
+    # Countries
+    "росія": ["рашка", "рфія", "московія", "мордор"],
+    "америка": ["піндоси", "сша", "штати", "usa"],
+    "європа": ["гейропа", "єс", "eu"],
+    "україна": ["незалежна", "нєнька", "ua"],
+    # War
+    "війна": ["сво", "спецоперація", "вторгнення"],
+    "армія": ["зсу", "всу", "збройні сили"],
+    "росіяни": ["орки", "рашисти", "кацапи"],
+    # Tech
+    "chatgpt": ["гпт", "чатгпт", "openai"],
+    "маск": ["ілон", "elon", "musk", "тесла", "твіттер"],
+}
+
+CHAT_MEMBERS = {
+    369544572: ["Женек", "жидос", "євген", "жменьщина", "жменьщіна", "жлобос", "Бушуєв", "Бушуев"],
+    645706876: ["гусьок", "Ігор", "Игорь", "Проценко", "утер", "гусатий", "гусачок", "птиценко", "птіценко", "качур", "качка"],
+    325310655: ["сержик", "S D", "Серёга", "Серунька", "Серый", "сион", "sion", "пончик"],
+}
+
+
+def _format_aliases_for_prompt() -> str:
+    lines = []
+    for canonical, aliases in ENTITY_ALIASES.items():
+        lines.append(f"  {canonical}: {', '.join(aliases)}")
+    return "\n".join(lines)
+
+
+def _format_members_for_prompt() -> str:
+    lines = []
+    for user_id, nicknames in CHAT_MEMBERS.items():
+        lines.append(f"  user_id={user_id}: {', '.join(nicknames)}")
+    return "\n".join(lines)
+
+
+SYSTEM_PROMPT = f"""You are a chat history search agent. Your job is to find messages in a chat history database.
 
 You have three tools:
 
@@ -15,6 +65,9 @@ You have three tools:
    Rules:
    - ALWAYS sort by timestamp, NEVER by id (two chats were merged, IDs are not chronological)
    - Use LIKE for text matching (case-insensitive by default in SQLite)
+   - Use word stems (slugs) in LIKE patterns to catch all morphological forms.
+     Examples: "жоп%" catches жопа/жопу/жопі/жопою, "порошенк%" catches Порошенка/Порошенко/Порошенку,
+     "крипт%" catches крипта/крипто/криптовалюта. Strip the ending, keep the stem.
    - All queries search across all chats (no chat_id filter needed)
    Best for: exact phrases, date/time filters, counting, aggregations, user-specific queries.
 
@@ -36,6 +89,8 @@ Rules:
 - Include all relevant highlight_terms — these are bolded in the displayed messages.
 
 Counting and ranking queries:
+- ALWAYS use word stems (slugs) with LIKE for counting/ranking — e.g. WHERE text LIKE '%жоп%'
+  instead of '%жопа%', WHERE text LIKE '%порошенк%' instead of '%Порошенка%'.
 - For "how many times" / "скільки разів" / "сколько раз": first run a COUNT aggregation SQL,
   then run a regular SELECT to get the matching messages. Put the count in the explanation
   (e.g. "Слово 'жопа' згадали 47 разів").
@@ -43,7 +98,19 @@ Counting and ranking queries:
   to get the ranking (user + count), then fetch the actual messages. Put the ranking in
   the explanation (e.g. "Топ: 1. Леха — 23 рази, 2. Саша — 15, 3. Дима — 8").
 - Always submit the actual messages too (result_ids) so the user can browse them.
-- The explanation is shown to the user as a header above the paginated messages."""
+- The explanation is shown to the user as a header above the paginated messages.
+
+Chat members (use user_id for filtering by person, nicknames for text search):
+{_format_members_for_prompt()}
+When searching for messages BY a person, use WHERE user_id = <id>.
+When searching for messages ABOUT a person, use OR conditions for all their nicknames in text.
+Example: "що казав Женек про крипту" → WHERE user_id = 369544572 AND text LIKE '%крипт%'
+Example: "хто згадував гуська" → WHERE text LIKE '%гусьок%' OR text LIKE '%гусач%' OR text LIKE '%качур%' OR text LIKE '%птиценк%'
+
+Known entity aliases (when user mentions any alias, search for ALL forms):
+{_format_aliases_for_prompt()}
+When searching for any of these terms, use multiple OR conditions in SQL to cover all aliases.
+Example: searching for "порох" → WHERE text LIKE '%порох%' OR text LIKE '%порошенк%' OR text LIKE '%барига%' OR text LIKE '%рошен%'"""
 
 
 TOOL_DEFINITIONS = [
