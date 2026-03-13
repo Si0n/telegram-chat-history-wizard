@@ -22,7 +22,7 @@ CHAT_MODEL = "gpt-5-mini"
 EMBEDDING_MODEL = "text-embedding-3-large"  # Must match existing index
 
 # Agent
-AGENT_MAX_ITERATIONS = 3
+AGENT_MAX_ITERATIONS = 5
 AGENT_QUERY_TIMEOUT = 5        # seconds
 AGENT_MAX_RESULTS = 50
 

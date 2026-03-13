@@ -79,7 +79,7 @@ You have three tools:
 
 Rules:
 - Default sort order is oldest first (ASC) unless the user asks for recent/latest messages.
-- You have a maximum of 3 tool calls total. Use them wisely.
+- You have a maximum of 5 rounds of tool calls. Use them wisely.
 - If the user says "exact/точно/дословно", use run_sql with LIKE only (no vector search).
 - Otherwise, choose the best tool for the question.
 - You MUST call submit_results when done. Never respond with plain text.
@@ -89,15 +89,21 @@ Rules:
 - Include all relevant highlight_terms — these are bolded in the displayed messages.
 
 Counting and ranking queries:
-- ALWAYS use word stems (slugs) with LIKE for counting/ranking — e.g. WHERE text LIKE '%жоп%'
-  instead of '%жопа%', WHERE text LIKE '%порошенк%' instead of '%Порошенка%'.
-- For "how many times" / "скільки разів" / "сколько раз": first run a COUNT aggregation SQL,
-  then run a regular SELECT to get the matching messages. Put the count in the explanation
-  (e.g. "Слово 'жопа' згадали 47 разів").
-- For "who said X the most" / "хто найбільше" / "кто больше всех": run a GROUP BY query
-  to get the ranking (user + count), then fetch the actual messages. Put the ranking in
-  the explanation (e.g. "Топ: 1. Леха — 23 рази, 2. Саша — 15, 3. Дима — 8").
-- Always submit the actual messages too (result_ids) so the user can browse them.
+- ALWAYS use run_sql for counting/ranking. NEVER use vector_search for these.
+- ALWAYS use word stems (slugs) with LIKE and cover ALL known aliases with OR conditions.
+- For counting ("скільки разів" / "сколько раз" / "порахуй"):
+  1. Run a single SQL with COUNT + all aliases. For comparing multiple entities, use one query:
+     SELECT
+       SUM(CASE WHEN text LIKE '%порошенк%' OR text LIKE '%порох%' OR text LIKE '%барига%' OR text LIKE '%рошен%' THEN 1 ELSE 0 END) as poroshenko_count,
+       SUM(CASE WHEN text LIKE '%зеленськ%' OR text LIKE '%зеля%' OR text LIKE '%зелупа%' OR text LIKE '%зелібоб%' OR text LIKE '%зе %' THEN 1 ELSE 0 END) as zelensky_count
+     FROM messages
+  2. Then run SELECT to get the actual matching messages (with the same OR conditions).
+  3. Put the counts in the explanation (e.g. "Порошенко згадали 2539 разів, Зеленського — 1847 разів").
+- For ranking ("хто найбільше" / "кто больше всех"):
+  1. Run GROUP BY query to get the ranking (username + count).
+  2. Then fetch the actual messages.
+  3. Put the ranking in explanation (e.g. "Топ: 1. Леха — 23, 2. Саша — 15, 3. Дима — 8").
+- Always submit the actual messages too so the user can browse them.
 - The explanation is shown to the user as a header above the paginated messages.
 
 Chat members (use user_id for filtering by person, nicknames for text search):
