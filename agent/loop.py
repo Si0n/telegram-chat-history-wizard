@@ -123,7 +123,7 @@ class AgentLoop:
             )
         except Exception as e:
             logger.error(f"Vector search error: {e}")
-            return [{"error": f"Vector search failed: {e}"}]
+            return {"error": f"Vector search failed: {e}"}
 
         if not results["ids"] or not results["ids"][0]:
             return []

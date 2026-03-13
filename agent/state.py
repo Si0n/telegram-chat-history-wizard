@@ -24,7 +24,7 @@ class DialogueState:
     anchor_chat_id: int
     current_window: list[dict]
     highlight_terms: list[str] = field(default_factory=list)
-    saved_search_state: object = None  # Embedded SearchState copy for "back to results"
+    saved_search_state: "SearchState | None" = None
     last_accessed: float = field(default_factory=time.time)
 
 
